@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "MediRecuerda",
+    "slug": "medirecuerda",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#FFFFFF",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.medirecuerda.app"
+    },
+    "android": {
+      "package": "com.medirecuerda.app",
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "VIBRATE",
+        "SCHEDULE_EXACT_ALARM"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "color": "#2E7D32"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "MediRecuerda necesita la cámara para fotografiar tu orden médica.",
+          "photosPermission": "MediRecuerda necesita acceso a tus fotos para leer tu orden médica."
+        }
+      ],
+      "expo-status-bar"
+    ],
+    "scheme": "medirecuerda"
+  }
+}

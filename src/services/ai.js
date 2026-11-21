@@ -1,5 +1,5 @@
 // Servicio de IA (OpenRouter): extrae los medicamentos de una orden médica
-// a partir de una foto y/o de texto pegado.
+// a partir de una foto y/o de texto pegado, y la IDENTIFICA (principio activo, concentración y forma).
 //
 // IMPORTANTE (prototipo): la clave viaja dentro de la app porque Expo incluye las
 // variables EXPO_PUBLIC_* en el paquete. Para producción, mueve esta llamada a un
@@ -9,12 +9,15 @@ const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY;
 const MODEL = process.env.EXPO_PUBLIC_OPENROUTER_MODEL || 'openrouter/free';
 
-const SYSTEM_PROMPT = `Eres un asistente que transcribe órdenes médicas (fórmulas) a datos estructurados.
+const SYSTEM_PROMPT = `Eres un asistente que transcribe órdenes médicas (fórmulas) a datos estructurados e IDENTIFICA cada medicamento.
 NO das consejos médicos ni cambias dosis: solo extraes lo que está escrito.
 Responde ÚNICAMENTE con JSON válido, sin texto adicional ni markdown, con este formato:
-{"medications":[{"name":"string","dose":"string","intervalHours":number,"durationDays":number|null,"notes":"string"}]}
+{"medications":[{"name":"string","activeIngredient":"string","strength":"string","form":"string","dose":"string","intervalHours":number,"durationDays":number|null,"notes":"string"}]}
 Reglas:
-- "name": nombre del medicamento (incluye concentración si aparece, p. ej. "Losartán 50 mg").
+- "name": nombre del medicamento tal como aparece en la orden (comercial o genérico).
+- "activeIngredient": principio activo en español (genérico). Si el nombre es comercial, identifica su principio activo; si no estás seguro, deja "".
+- "strength": concentración (p. ej. "500 mg", "50 mg/5 ml") o "".
+- "form": forma farmacéutica (tableta, cápsula, jarabe, gotas, crema, inyectable, etc.) o "".
 - "dose": cantidad por toma (p. ej. "1 tableta", "5 ml", "2 gotas").
 - "intervalHours": cada cuántas horas se toma. "cada 8 horas"=8; "3 veces al día"=8; "2 veces al día"=12; "1 vez al día"=24; "cada 6 horas"=6.
 - "durationDays": días de tratamiento (p. ej. "por 7 días"=7, "por 2 semanas"=14, "1 mes"=30). Usa null si es continuo o no se indica.
@@ -95,6 +98,9 @@ export function parseMedications(raw) {
       const days = Math.round(Number(m.durationDays));
       return {
         name: String(m.name).trim(),
+        activeIngredient: String(m.activeIngredient || '').trim(),
+        strength: String(m.strength || '').trim(),
+        form: String(m.form || '').trim(),
         dose: String(m.dose || '').trim(),
         intervalHours: interval >= 1 && interval <= 24 ? interval : 8,
         durationDays: days > 0 ? days : null,

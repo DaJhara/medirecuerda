@@ -1,4 +1,5 @@
-// Ruta "/scan": foto o texto -> IA (OpenRouter) -> revisión -> guardar.
+// Ruta "/scan": foto o texto -> IA (OpenRouter) identifica cada medicamento -> imagen de referencia
+// (mercado colombiano) -> revisión -> guardar.
 // La IA solo transcribe; el usuario SIEMPRE revisa y corrige antes de guardar.
 import React, { useState } from 'react';
 import { View, Text, ScrollView, Image, ActivityIndicator, Alert, TouchableOpacity, StyleSheet } from 'react-native';
@@ -7,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { Header, Button, Card, Field } from '../src/components/UI';
 import { colors, font } from '../src/theme';
 import { analyzePrescription } from '../src/services/ai';
+import { findReferenceImage } from '../src/services/imageSearch';
 import { parseTime, nextOccurrence } from '../src/services/schedule';
 import { useApp } from '../src/context/AppContext';
 
@@ -14,7 +16,7 @@ export default function ScanScreen() {
   const router = useRouter();
   const { saveMany } = useApp();
   const onClose = () => router.back();
-  const onSaveMany = (arr) => { saveMany(arr); router.replace('/'); };
+  const onSaveMany = async (arr) => { await saveMany(arr); router.replace('/'); };
   const [image, setImage] = useState(null); // { uri, base64, mime }
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -48,6 +50,11 @@ export default function ScanScreen() {
           meds.map((m) => ({
             include: true,
             name: m.name,
+            activeIngredient: m.activeIngredient, // identificado por la IA
+            strength: m.strength,
+            form: m.form,
+            imageUrl: null,
+            imageSource: null,
             dose: m.dose,
             intervalHours: String(m.intervalHours),
             durationDays: m.durationDays ? String(m.durationDays) : '',
@@ -55,6 +62,11 @@ export default function ScanScreen() {
             time: defaultTime,
           }))
         );
+        // Imagen de referencia del mercado colombiano, una búsqueda por medicamento.
+        meds.forEach(async (m, i) => {
+          const img = await findReferenceImage(m);
+          if (img) update(i, { imageUrl: img.url, imageSource: img.source });
+        });
       }
     } catch (e) {
       Alert.alert('No se pudo analizar', e.message);
@@ -85,6 +97,9 @@ export default function ScanScreen() {
         durationDays: days,
         notes: it.notes.trim(),
         active: true,
+        activeIngredient: it.activeIngredient || '',
+        imageUrl: it.imageUrl || null,
+        imageSource: it.imageSource || null,
       });
     }
     onSaveMany(result);
@@ -130,6 +145,18 @@ export default function ScanScreen() {
                   </View>
                   <Text style={s.checkText}>{it.include ? 'Se agregará' : 'No se agregará'}</Text>
                 </TouchableOpacity>
+                {/* Identificación hecha por la IA + imagen de referencia */}
+                {(it.activeIngredient || it.strength || it.form || it.imageUrl) && (
+                  <View style={s.ident}>
+                    {it.imageUrl ? <Image source={{ uri: it.imageUrl }} style={s.thumb} resizeMode="contain" /> : null}
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.identTitle}>Identificado por la IA</Text>
+                      {it.activeIngredient ? <Text style={s.identText}>Principio activo: {it.activeIngredient}</Text> : null}
+                      {it.strength || it.form ? <Text style={s.identText}>{[it.strength, it.form].filter(Boolean).join(' · ')}</Text> : null}
+                      {it.imageUrl ? <Text style={s.identSrc}>Imagen de referencia · {it.imageSource}</Text> : null}
+                    </View>
+                  </View>
+                )}
                 <Field label="Medicamento" value={it.name} onChangeText={(v) => update(i, { name: v })} />
                 <Field label="Dosis" value={it.dose} onChangeText={(v) => update(i, { dose: v })} />
                 <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -154,5 +181,10 @@ const s = StyleSheet.create({
   section: { fontSize: font.title, fontWeight: '800', color: colors.primaryDark, marginBottom: 10 },
   check: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   box: { width: 28, height: 28, borderRadius: 8, borderWidth: 2, borderColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  ident: { flexDirection: 'row', gap: 12, backgroundColor: colors.primaryLight, borderRadius: 14, padding: 10, marginBottom: 14, alignItems: 'center' },
+  thumb: { width: 72, height: 72, borderRadius: 10, backgroundColor: colors.white },
+  identTitle: { fontSize: 13, fontWeight: '800', color: colors.primaryDark, marginBottom: 2 },
+  identText: { fontSize: 15, color: colors.text },
+  identSrc: { fontSize: 11, color: colors.muted, marginTop: 2 },
   checkText: { fontSize: 15, fontWeight: '700', color: colors.primaryDark },
 });

@@ -31,7 +31,6 @@ export async function ensurePermissions() {
     await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
       name: 'Recordatorios de medicamentos',
       importance: Notifications.AndroidImportance.MAX,
-      sound: 'default',
       enableVibrate: true,
       vibrationPattern: [0, 500, 250, 500],
     });

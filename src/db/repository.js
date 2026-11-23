@@ -4,7 +4,7 @@
 //   - Aplazar: máximo 2 veces; mueve la toma y las FUTURAS tomas del mismo medicamento.
 //   - Omitir:  guarda la hora; NO mueve las tomas siguientes.
 //   - Tercer momento (tras 2 aplazamientos): si en 10 min no se marca, se omite sola.
-import { getDb, getLocalUserId } from './database';
+import { getDb, getCurrentUserId, setCurrentUserId } from './database';
 import { iso, startOfDay, parseDayKey, dayKey, uuid, MIN, HOUR, DAY } from '../utils/time';
 
 export const SNOOZE_MINUTES = 10;       // cuánto se aplaza cada vez
@@ -108,7 +108,9 @@ async function generateForMed(db, med, fromMs) {
 
 async function ensureDosesImpl() {
   const db = await getDb();
-  const meds = await db.getAllAsync('SELECT * FROM medications WHERE active = 1 AND deleted_at IS NULL');
+  const uid = await getCurrentUserId(db);
+  if (!uid) return;
+  const meds = await db.getAllAsync('SELECT * FROM medications WHERE active = 1 AND deleted_at IS NULL AND user_id = ?', [uid]);
   await db.withTransactionAsync(async () => {
     for (const m of meds) await generateForMed(db, m, startOfDay(Date.now()));
   });
@@ -119,7 +121,8 @@ async function ensureDosesImpl() {
 // ---------------------------------------------------------------------------
 async function listMedsImpl() {
   const db = await getDb();
-  const rows = await db.getAllAsync('SELECT * FROM medications WHERE deleted_at IS NULL ORDER BY created_at');
+  const uid = await getCurrentUserId(db);
+  const rows = await db.getAllAsync('SELECT * FROM medications WHERE deleted_at IS NULL AND user_id = ? ORDER BY created_at', [uid]);
   return rows.map(mapMed);
 }
 
@@ -156,7 +159,7 @@ async function saveMedicationImpl(d) {
       }
     } else {
       medId = uuid();
-      const userId = await getLocalUserId(db);
+      const userId = await getCurrentUserId(db);
       await db.runAsync(
         `INSERT INTO medications
            (id, user_id, name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
@@ -217,9 +220,9 @@ async function getTodayDosesImpl() {
   const from = startOfDay(Date.now());
   const rows = await db.getAllAsync(
     `${DOSE_SELECT}
-     WHERE m.deleted_at IS NULL AND m.active = 1 AND d.scheduled_at >= ? AND d.scheduled_at < ?
+     WHERE m.deleted_at IS NULL AND m.active = 1 AND m.user_id = ? AND d.scheduled_at >= ? AND d.scheduled_at < ?
      ORDER BY d.due_at`,
-    [iso(from), iso(from + DAY)]
+    [await getCurrentUserId(db), iso(from), iso(from + DAY)]
   );
   return rows.map(mapDose);
 }
@@ -229,9 +232,9 @@ async function getUpcomingImpl(limit = 60) {
   const db = await getDb();
   const rows = await db.getAllAsync(
     `${DOSE_SELECT}
-     WHERE m.deleted_at IS NULL AND m.active = 1 AND d.status = 'pending' AND d.due_at > ?
+     WHERE m.deleted_at IS NULL AND m.active = 1 AND m.user_id = ? AND d.status = 'pending' AND d.due_at > ?
      ORDER BY d.due_at LIMIT ?`,
-    [iso(Date.now()), limit]
+    [await getCurrentUserId(db), iso(Date.now()), limit]
   );
   return rows.map(mapDose);
 }
@@ -374,9 +377,9 @@ async function getMonthMarksImpl(year, month) {
   const from = new Date(year, month, 1).getTime();
   const to = new Date(year, month + 1, 1).getTime();
   const rows = await db.getAllAsync(
-    `SELECT d.scheduled_at FROM dose_logs d
-     WHERE d.scheduled_at >= ? AND d.scheduled_at < ? AND ${HAS_DATA}`,
-    [iso(from), iso(to), iso(Date.now())]
+    `SELECT d.scheduled_at FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+     WHERE m.user_id = ? AND d.scheduled_at >= ? AND d.scheduled_at < ? AND ${HAS_DATA}`,
+    [await getCurrentUserId(db), iso(from), iso(to), iso(Date.now())]
   );
   return [...new Set(rows.map((r) => dayKey(Date.parse(r.scheduled_at))))];
 }
@@ -387,9 +390,9 @@ async function getHistoryDayImpl(key) {
   const from = parseDayKey(key);
   const rows = await db.getAllAsync(
     `${DOSE_SELECT}
-     WHERE d.scheduled_at >= ? AND d.scheduled_at < ? AND ${HAS_DATA}
+     WHERE m.user_id = ? AND d.scheduled_at >= ? AND d.scheduled_at < ? AND ${HAS_DATA}
      ORDER BY d.scheduled_at`,
-    [iso(from), iso(from + DAY), iso(Date.now())]
+    [await getCurrentUserId(db), iso(from), iso(from + DAY), iso(Date.now())]
   );
   const groups = new Map();
   for (const r of rows.map(mapDose)) {
@@ -406,10 +409,15 @@ async function getHistoryDayImpl(key) {
 // ---------------------------------------------------------------------------
 const DEFAULT_SETTINGS = { sound: true, vibrate: true };
 
+// Las versiones anteriores guardaban "Usuario local" como nombre; se trata como vacío.
+const cleanName = (n) => (!n || n === 'Usuario local' ? '' : n);
+
 function mapProfile(u) {
   return {
-    // Las versiones anteriores guardaban "Usuario local" como nombre; se trata como vacío.
-    fullName: !u?.display_name || u.display_name === 'Usuario local' ? '' : u.display_name,
+    email: u?.email || '',
+    provider: u?.auth_provider || 'local',
+    photoUrl: u?.photo_url || null,
+    fullName: cleanName(u?.display_name),
     age: u?.age ?? null,
     heightCm: u?.height_cm ?? null,
     weightKg: u?.weight_kg ?? null,
@@ -419,18 +427,22 @@ function mapProfile(u) {
 
 async function getProfileImpl() {
   const db = await getDb();
-  const u = await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [await getLocalUserId(db)]);
+  const u = await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [await getCurrentUserId(db)]);
   return mapProfile(u);
 }
 
 // Guarda el perfil y lo deja pendiente de sincronizar (synced_at = NULL).
 async function saveProfileImpl(p) {
   const db = await getDb();
+  const uid = await getCurrentUserId(db);
+  const current = await db.getFirstAsync('SELECT photo_url FROM app_users WHERE id = ?', [uid]);
+  // photoUrl: undefined = no tocar; null o '' = quitar la foto; texto = nueva foto.
+  const photo = p.photoUrl === undefined ? current?.photo_url ?? null : p.photoUrl || null;
   await db.runAsync(
-    `UPDATE app_users SET display_name=?, age=?, height_cm=?, weight_kg=?, observations=?, updated_at=?, synced_at=NULL
+    `UPDATE app_users SET display_name=?, photo_url=?, age=?, height_cm=?, weight_kg=?, observations=?, updated_at=?, synced_at=NULL
      WHERE id=?`,
-    [p.fullName.trim(), p.age ?? null, p.heightCm ?? null, p.weightKg ?? null, (p.observations || '').trim(),
-     iso(Date.now()), await getLocalUserId(db)]
+    [p.fullName.trim(), photo, p.age ?? null, p.heightCm ?? null, p.weightKg ?? null, (p.observations || '').trim(),
+     iso(Date.now()), uid]
   );
 }
 
@@ -453,11 +465,154 @@ async function saveSettingsImpl(settings) {
 // Datos de solo lectura de la cuenta local.
 async function getAccountInfoImpl() {
   const db = await getDb();
-  const u = await db.getFirstAsync('SELECT id, created_at FROM app_users WHERE id = ?', [await getLocalUserId(db)]);
-  const meds = await db.getFirstAsync('SELECT COUNT(*) AS c FROM medications WHERE deleted_at IS NULL');
-  const logs = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM dose_logs WHERE status <> 'pending'`);
-  const pending = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM dose_logs WHERE synced_at IS NULL AND status <> 'pending'`);
-  return { id: u.id, createdAt: toMs(u.created_at), meds: meds.c, records: logs.c, unsynced: pending.c };
+  const uid = await getCurrentUserId(db);
+  const u = await db.getFirstAsync('SELECT id, email, auth_provider, created_at FROM app_users WHERE id = ?', [uid]);
+  const meds = await db.getFirstAsync('SELECT COUNT(*) AS c FROM medications WHERE deleted_at IS NULL AND user_id = ?', [uid]);
+  const logs = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+     WHERE m.user_id = ? AND d.status <> 'pending'`, [uid]);
+  const pending = await db.getFirstAsync(
+    `SELECT COUNT(*) AS c FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+     WHERE m.user_id = ? AND d.synced_at IS NULL AND d.status <> 'pending'`, [uid]);
+  return { id: u.id, email: u.email || '', provider: u.auth_provider, createdAt: toMs(u.created_at),
+           meds: meds.c, records: logs.c, unsynced: pending.c };
+}
+
+// ---------------------------------------------------------------------------
+// Cuentas y sesión
+// ---------------------------------------------------------------------------
+const mapUser = (u) =>
+  u && { id: u.id, email: u.email || '', provider: u.auth_provider, name: cleanName(u.display_name), photoUrl: u.photo_url || null };
+
+const accountError = (code, message) => Object.assign(new Error(message), { code });
+
+// Reutiliza el usuario anónimo (con los datos anteriores al login) si aún no tiene cuenta; si no, crea uno.
+async function adoptOrCreateUser(db, { email, provider, googleSub = null, name = '', photoUrl = null }) {
+  const now = iso(Date.now());
+  const anon = await db.getFirstAsync(
+    `SELECT id FROM app_users WHERE email IS NULL AND google_sub IS NULL AND auth_provider = 'local' ORDER BY created_at LIMIT 1`
+  );
+  if (anon) {
+    await db.runAsync(
+      `UPDATE app_users SET email=?, auth_provider=?, google_sub=?, display_name=?, photo_url=?, updated_at=?, synced_at=NULL WHERE id=?`,
+      [email, provider, googleSub, name, photoUrl, now, anon.id]
+    );
+    return anon.id;
+  }
+  const id = uuid();
+  await db.runAsync(
+    `INSERT INTO app_users (id, email, auth_provider, google_sub, display_name, photo_url, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, email, provider, googleSub, name, photoUrl, now, now]
+  );
+  return id;
+}
+
+async function getSessionUserImpl() {
+  const db = await getDb();
+  const id = await getCurrentUserId(db);
+  if (!id) return null;
+  const u = await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [id]);
+  if (!u) { await setCurrentUserId(db, null); return null; }
+  return mapUser(u);
+}
+
+// Crea una cuenta con correo y contraseña (ya procesada: hash + sal) y abre la sesión.
+async function createPasswordAccountImpl({ email, name, hash, salt }) {
+  const db = await getDb();
+  const mail = email.trim().toLowerCase();
+  if (await db.getFirstAsync('SELECT id FROM app_users WHERE lower(email) = ?', [mail])) {
+    throw accountError('EMAIL_EXISTS', 'Ya existe una cuenta con ese correo.');
+  }
+  let id;
+  await db.withTransactionAsync(async () => {
+    id = await adoptOrCreateUser(db, { email: mail, provider: 'password', name: name.trim() });
+    await db.runAsync(
+      'INSERT INTO local_credentials (user_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?)',
+      [id, hash, salt, iso(Date.now())]
+    );
+    await setCurrentUserId(db, id);
+  });
+  return mapUser(await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [id]));
+}
+
+// Datos para validar un inicio de sesión con correo (la comparación del hash la hace auth.js).
+async function findAccountImpl(email) {
+  const db = await getDb();
+  const r = await db.getFirstAsync(
+    `SELECT u.id, u.auth_provider, c.password_hash, c.password_salt
+     FROM app_users u LEFT JOIN local_credentials c ON c.user_id = u.id
+     WHERE lower(u.email) = ?`,
+    [email.trim().toLowerCase()]
+  );
+  return r ? { id: r.id, provider: r.auth_provider, hash: r.password_hash, salt: r.password_salt } : null;
+}
+
+async function startSessionImpl(userId) {
+  const db = await getDb();
+  await setCurrentUserId(db, userId);
+  return mapUser(await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [userId]));
+}
+
+// Entra con una cuenta de Google. Nombre y foto de Google se copian SOLO si el campo está vacío,
+// para no pisar lo que el usuario edite luego en su perfil.
+async function signInGoogleUserImpl({ sub, email, name, photoUrl }) {
+  const db = await getDb();
+  const mail = (email || '').trim().toLowerCase();
+  let id;
+  await db.withTransactionAsync(async () => {
+    let u = await db.getFirstAsync('SELECT * FROM app_users WHERE google_sub = ?', [sub]);
+    if (!u && mail) u = await db.getFirstAsync('SELECT * FROM app_users WHERE lower(email) = ?', [mail]); // vincula cuenta existente
+    if (u) {
+      id = u.id;
+      await db.runAsync(
+        `UPDATE app_users SET google_sub = ?,
+           display_name = CASE WHEN display_name IS NULL OR display_name = '' THEN ? ELSE display_name END,
+           photo_url    = CASE WHEN photo_url IS NULL OR photo_url = '' THEN ? ELSE photo_url END,
+           updated_at = ? WHERE id = ?`,
+        [sub, name || '', photoUrl || null, iso(Date.now()), id]
+      );
+    } else {
+      id = await adoptOrCreateUser(db, { email: mail, provider: 'google', googleSub: sub, name: name || '', photoUrl: photoUrl || null });
+    }
+    await setCurrentUserId(db, id);
+  });
+  return mapUser(await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [id]));
+}
+
+async function signOutImpl() {
+  const db = await getDb();
+  await setCurrentUserId(db, null);
+}
+
+// ---------------------------------------------------------------------------
+// Resumen de los últimos días (para la gráfica del historial)
+// ---------------------------------------------------------------------------
+async function getWeekSummaryImpl(days = 7) {
+  const db = await getDb();
+  const now = Date.now();
+  const todayStart = startOfDay(now);
+  const from = todayStart - (days - 1) * DAY;
+  const rows = await db.getAllAsync(
+    `SELECT d.scheduled_at, d.due_at, d.status FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+     WHERE m.user_id = ? AND d.scheduled_at >= ? AND d.scheduled_at < ? AND ${HAS_DATA}`,
+    [await getCurrentUserId(db), iso(from), iso(todayStart + DAY), iso(now)]
+  );
+  const list = Array.from({ length: days }, (_, i) => {
+    const time = from + i * DAY;
+    return { key: dayKey(time), time, taken: 0, skipped: 0, missed: 0, total: 0 };
+  });
+  const byKey = Object.fromEntries(list.map((d) => [d.key, d]));
+  for (const r of rows) {
+    const day = byKey[dayKey(Date.parse(r.scheduled_at))];
+    if (!day) continue;
+    if (r.status === 'taken') day.taken++;
+    else if (r.status === 'skipped') day.skipped++;
+    else if (Date.parse(r.due_at) <= now) day.missed++; // venció sin respuesta
+    else continue;                                       // aplazada que aún no vence: no cuenta todavía
+    day.total++;
+  }
+  return list;
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +633,13 @@ export const undoDose = (id) => serial(() => undoDoseImpl(id));
 export const autoSkipExpired = () => serial(autoSkipExpiredImpl);
 export const getMonthMarks = (y, m) => serial(() => getMonthMarksImpl(y, m));
 export const getHistoryDay = (key) => serial(() => getHistoryDayImpl(key));
+export const getSessionUser = () => serial(getSessionUserImpl);
+export const createPasswordAccount = (d) => serial(() => createPasswordAccountImpl(d));
+export const findAccount = (email) => serial(() => findAccountImpl(email));
+export const startSession = (id) => serial(() => startSessionImpl(id));
+export const signInGoogleUser = (g) => serial(() => signInGoogleUserImpl(g));
+export const signOutUser = () => serial(signOutImpl);
+export const getWeekSummary = (days) => serial(() => getWeekSummaryImpl(days));
 export const getProfile = () => serial(getProfileImpl);
 export const saveProfile = (p) => serial(() => saveProfileImpl(p));
 export const getSettings = () => serial(getSettingsImpl);

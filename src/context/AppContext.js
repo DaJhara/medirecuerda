@@ -1,4 +1,4 @@
-// Contexto global: medicamentos, tomas de hoy, perfil y ajustes, leídos de la base de datos SQLite.
+// Contexto global: sesión, medicamentos, tomas de hoy, perfil y ajustes, leídos de la base de datos SQLite.
 // Se monta en app/_layout.js para que todas las rutas compartan el mismo estado.
 //
 // Cada acción (Tomé / Aplazar / Omitir / editar...) escribe en la BD, vuelve a leer los datos
@@ -9,9 +9,12 @@ import * as repo from '../db/repository';
 import { getDb } from '../db/database';
 import { configureNotifications, ensurePermissions, ensureChannel, rescheduleAll } from '../services/notifications';
 import { findReferenceImage } from '../services/imageSearch';
+import * as auth from '../services/auth';
 import { dayKey } from '../utils/time';
 
 configureNotifications();
+
+const EMPTY_PROFILE = { email: '', provider: 'local', photoUrl: null, fullName: '', age: null, heightCm: null, weightKg: null, observations: '' };
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -19,7 +22,9 @@ export const useApp = () => useContext(AppContext);
 export function AppProvider({ children }) {
   const [meds, setMeds] = useState([]);
   const [todayDoses, setTodayDoses] = useState([]);
-  const [profile, setProfile] = useState({ fullName: '', age: null, heightCm: null, weightKg: null, observations: '' });
+  const [session, setSession] = useState(null); // usuario con la sesión iniciada (null = sin sesión)
+  const sessionRef = useRef(null);
+  const [profile, setProfile] = useState(EMPTY_PROFILE);
   const [settings, setSettings] = useState({ sound: true, vibrate: true });
   const settingsRef = useRef(settings); // copia para usarla dentro de callbacks sin quedar desactualizada
   const [ready, setReady] = useState(false);
@@ -34,7 +39,17 @@ export function AppProvider({ children }) {
     rescheduleAll(upcoming, settingsRef.current).catch((e) => console.warn('Error reprogramando notificaciones:', e));
   }, []);
 
-  // Carga inicial: abre la BD, genera tomas, aplica omisiones pendientes y pide permisos.
+  // Carga los datos del usuario que acaba de entrar (o que ya tenía sesión).
+  const enterSession = useCallback(async (user) => {
+    sessionRef.current = user;
+    setSession(user);
+    setProfile(await repo.getProfile());
+    await repo.ensureDoses();
+    await repo.autoSkipExpired();
+    await refresh();
+  }, [refresh]);
+
+  // Carga inicial: abre la BD, recupera la sesión (si existe) y pide permisos.
   useEffect(() => {
     (async () => {
       try {
@@ -42,10 +57,8 @@ export function AppProvider({ children }) {
         const savedSettings = await repo.getSettings();
         settingsRef.current = savedSettings;
         setSettings(savedSettings);
-        setProfile(await repo.getProfile());
-        await repo.ensureDoses();
-        await repo.autoSkipExpired();
-        await refresh();
+        const user = await auth.getSession();
+        if (user) await enterSession(user);
       } catch (error) {
         console.warn('Error iniciando la base de datos:', error);
       }
@@ -57,11 +70,11 @@ export function AppProvider({ children }) {
       readyRef.current = true;
       setReady(true);
     })();
-  }, [refresh]);
+  }, [enterSession]);
 
   // Vigilante: omite solo las tomas que agotaron sus aplazos y cambia de día a medianoche.
   const tick = useCallback(async () => {
-    if (!readyRef.current) return;
+    if (!readyRef.current || !sessionRef.current) return;
     try {
       const skipped = await repo.autoSkipExpired();
       const today = dayKey(Date.now());
@@ -85,6 +98,25 @@ export function AppProvider({ children }) {
       sub.remove();
     };
   }, [tick]);
+
+  // ---- Sesión: registrarse, entrar (correo o Google) y cerrar sesión ----
+  const signUp = useCallback(async (data) => enterSession(await auth.register(data)), [enterSession]);
+  const signIn = useCallback(async (data) => enterSession(await auth.login(data)), [enterSession]);
+  const signInGoogle = useCallback(async () => {
+    const user = await auth.loginWithGoogle();
+    if (user) await enterSession(user);
+    return !!user; // false = la persona canceló el selector de Google
+  }, [enterSession]);
+
+  const signOut = useCallback(async () => {
+    await auth.logout();
+    sessionRef.current = null;
+    await rescheduleAll([], settingsRef.current).catch(() => {}); // cancela los recordatorios de este usuario
+    setMeds([]);
+    setTodayDoses([]);
+    setProfile(EMPTY_PROFILE);
+    setSession(null); // el layout redirige solo a la pantalla de login
+  }, []);
 
   // ---- Perfil ----
   const saveProfile = useCallback(async (p) => {
@@ -159,7 +191,8 @@ export function AppProvider({ children }) {
   }, [meds, refresh]);
 
   const value = {
-    meds, todayDoses, ready, profile, settings, saveProfile, updateSettings,
+    meds, todayDoses, ready, session, profile, settings, saveProfile, updateSettings,
+    signUp, signIn, signInGoogle, signOut,
     takeDose, skipDose, snoozeDose, undoDose,
     saveMed, saveMany, deleteMed, toggleActive, fetchImage,
   };

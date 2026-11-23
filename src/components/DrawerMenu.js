@@ -2,12 +2,14 @@
 // - Se abre con el botón de hamburguesa del encabezado o deslizando desde el borde izquierdo (ver DrawerEdgeSwipe).
 // - Se cierra tocando fuera del panel, deslizándolo a la izquierda o con el botón "atrás" de Android.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDrawer } from '../context/DrawerContext';
 import { useApp } from '../context/AppContext';
+import { Avatar } from './UI';
+import { confirmAction, notify } from '../utils/dialog';
 import { colors, font } from '../theme';
 
 // Opciones del menú: cada una abre una ruta de app/.
@@ -17,16 +19,9 @@ const ITEMS = [
   { label: 'Configuraciones', icon: 'settings-outline', path: '/settings' },
 ];
 
-// Iniciales para el círculo del encabezado ("María López" -> "ML").
-function initials(name) {
-  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
-}
-
 export default function DrawerMenu() {
   const { visible, close } = useDrawer();
-  const { profile } = useApp();
+  const { profile, signOut } = useApp();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
@@ -65,10 +60,17 @@ export default function DrawerMenu() {
     router.push(path);
   };
 
-  // "Cerrar sesión" todavía no tiene funcionalidad: solo avisa.
-  const logout = () => {
+  // Cerrar sesión: pide confirmación, cierra la sesión y la app vuelve sola a la pantalla de login.
+  // Los datos del usuario se conservan en el teléfono para cuando vuelva a entrar.
+  const logout = async () => {
     close();
-    Alert.alert('Cerrar sesión', 'Esta función aún no está disponible.');
+    const ok = await confirmAction('Cerrar sesión', '¿Quieres cerrar tu sesión? Dejarás de recibir recordatorios hasta que vuelvas a entrar.', 'Cerrar sesión', true);
+    if (!ok) return;
+    try {
+      await signOut();
+    } catch (e) {
+      notify('No se pudo cerrar la sesión', e.message);
+    }
   };
 
   const backdrop = x.interpolate({ inputRange: [-width, 0], outputRange: [0, 0.45] });
@@ -82,13 +84,13 @@ export default function DrawerMenu() {
         </Animated.View>
 
         <Animated.View style={[s.panel, { width, transform: [{ translateX: x }] }]} {...pan.panHandlers}>
-          {/* Cabecera verde con el nombre del perfil */}
+          {/* Cabecera verde: foto del usuario y su nombre debajo */}
           <View style={[s.head, { paddingTop: insets.top + 20 }]}>
-            <View style={s.avatar}>
-              <Text style={s.avatarText}>{initials(profile.fullName)}</Text>
+            <View style={{ marginBottom: 12 }}>
+              <Avatar uri={profile.photoUrl} name={profile.fullName} size={72} />
             </View>
-            <Text style={s.name} numberOfLines={2}>{profile.fullName || 'MediRecuerda'}</Text>
-            <Text style={s.sub}>{profile.fullName ? 'MediRecuerda' : 'Completa tu perfil'}</Text>
+            <Text style={s.name} numberOfLines={2}>{profile.fullName || 'Completa tu perfil'}</Text>
+            {profile.email ? <Text style={s.sub} numberOfLines={1}>{profile.email}</Text> : null}
           </View>
 
           {ITEMS.map((it) => (
@@ -99,7 +101,7 @@ export default function DrawerMenu() {
             </TouchableOpacity>
           ))}
 
-          {/* Cerrar sesión: al fondo del menú (sin funcionalidad por ahora) */}
+          {/* Cerrar sesión: al fondo del menú */}
           <View style={{ flex: 1 }} />
           <TouchableOpacity
             style={[s.item, s.logout, { paddingBottom: insets.bottom, minHeight: 60 + insets.bottom }]}
@@ -119,8 +121,6 @@ export default function DrawerMenu() {
 const s = StyleSheet.create({
   panel: { position: 'absolute', top: 0, bottom: 0, left: 0, backgroundColor: colors.white, elevation: 16 },
   head: { backgroundColor: colors.primary, paddingHorizontal: 20, paddingBottom: 22 },
-  avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.white, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  avatarText: { fontSize: 24, fontWeight: '800', color: colors.primary },
   name: { color: colors.white, fontSize: 20, fontWeight: '800' },
   sub: { color: '#DDF0DE', fontSize: 14, marginTop: 2 },
   item: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, minHeight: 60, borderBottomWidth: 1, borderBottomColor: colors.border },

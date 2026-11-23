@@ -1,4 +1,4 @@
-// Ruta "/account": información de la cuenta (por ahora, cuenta local del teléfono).
+// Ruta "/account": información de la cuenta con la sesión iniciada.
 // Espacio reservado para inicio de sesión y sincronización con el servidor (Postgres).
 import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
@@ -21,7 +21,9 @@ export default function AccountScreen() {
   const rows = info
     ? [
         ['Titular', profile.fullName || 'Sin nombre (completa tu perfil)'],
-        ['Tipo de cuenta', 'Local (solo en este teléfono)'],
+        ['Correo', info.email || '—'],
+        ['Tipo de cuenta', info.provider === 'google' ? 'Google' : 'Correo y contraseña'],
+        ['Datos guardados en', 'Este teléfono'],
         ['Cuenta creada', fmtDate(info.createdAt)],
         ['Medicamentos activos', String(info.meds)],
         ['Registros de tomas', String(info.records)],

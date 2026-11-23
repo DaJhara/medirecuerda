@@ -17,14 +17,19 @@ CREATE TYPE dose_event_type AS ENUM ('snoozed', 'taken', 'skipped', 'auto_skippe
 -- Usuarios (un teléfono = un usuario local; en el servidor puede haber muchos)
 -- ---------------------------------------------------------------------
 CREATE TABLE app_users (
-    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    display_name text,                                     -- nombre completo (con apellidos)
-    age          smallint CHECK (age BETWEEN 0 AND 120),
-    height_cm    numeric(5,1) CHECK (height_cm BETWEEN 30 AND 260),
-    weight_kg    numeric(5,1) CHECK (weight_kg BETWEEN 1 AND 500),
-    observations text,
-    created_at   timestamptz NOT NULL DEFAULT now(),
-    updated_at   timestamptz NOT NULL DEFAULT now()
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    email         text,                                    -- correo de la cuenta
+    auth_provider text NOT NULL DEFAULT 'local'
+                  CHECK (auth_provider IN ('local','password','google')),
+    google_sub    text,                                    -- id único de la cuenta de Google ("sub")
+    display_name  text,                                    -- nombre completo (con apellidos)
+    photo_url     text,                                    -- foto de perfil (URL o imagen en base64)
+    age           smallint CHECK (age IS NULL OR age BETWEEN 0 AND 120),
+    height_cm     numeric(5,1) CHECK (height_cm IS NULL OR height_cm BETWEEN 30 AND 260),
+    weight_kg     numeric(5,1) CHECK (weight_kg IS NULL OR weight_kg BETWEEN 1 AND 500),
+    observations  text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------
@@ -90,6 +95,8 @@ CREATE TABLE dose_events (
 -- ---------------------------------------------------------------------
 -- Índices
 -- ---------------------------------------------------------------------
+CREATE UNIQUE INDEX ux_users_email  ON app_users(lower(email)) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX ux_users_google ON app_users(google_sub) WHERE google_sub IS NOT NULL;
 CREATE INDEX idx_meds_user        ON medications(user_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_logs_med_sched   ON dose_logs(medication_id, scheduled_at);
 CREATE INDEX idx_logs_sched       ON dose_logs(scheduled_at);

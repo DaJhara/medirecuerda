@@ -21,8 +21,8 @@ export function getDb() {
 async function init() {
   const db = await SQLite.openDatabaseAsync('medirecuerda.db');
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-  await db.execAsync(SQLITE_SCHEMA);
-  await migrateSchema(db);
+  await migrateSchema(db);              // 1) columnas nuevas en tablas que ya existían
+  await db.execAsync(SQLITE_SCHEMA);    // 2) tablas e índices (los índices usan esas columnas)
   await ensureLocalUser(db);
   await migrateLegacy(db);
   return db;
@@ -41,7 +41,18 @@ async function setMeta(db, key, value) {
 // (CREATE TABLE IF NOT EXISTS no modifica tablas que ya existen).
 async function migrateSchema(db) {
   const cols = (await db.getAllAsync('PRAGMA table_info(app_users)')).map((c) => c.name);
-  const wanted = [['age', 'INTEGER'], ['height_cm', 'REAL'], ['weight_kg', 'REAL'], ['observations', 'TEXT']];
+  if (cols.length === 0) return; // instalación nueva: CREATE TABLE ya trae todo
+  // Las definiciones deben ser las mismas de src/db/schema.js.
+  const wanted = [
+    ['age', 'INTEGER CHECK (age IS NULL OR age BETWEEN 0 AND 120)'],
+    ['height_cm', 'REAL CHECK (height_cm IS NULL OR height_cm BETWEEN 30 AND 260)'],
+    ['weight_kg', 'REAL CHECK (weight_kg IS NULL OR weight_kg BETWEEN 1 AND 500)'],
+    ['observations', 'TEXT'],
+    ['email', 'TEXT'],
+    ['auth_provider', "TEXT NOT NULL DEFAULT 'local' CHECK (auth_provider IN ('local','password','google'))"],
+    ['google_sub', 'TEXT'],
+    ['photo_url', 'TEXT'],
+  ];
   for (const [name, type] of wanted) {
     if (!cols.includes(name)) await db.execAsync(`ALTER TABLE app_users ADD COLUMN ${name} ${type}`);
   }
@@ -59,8 +70,19 @@ async function ensureLocalUser(db) {
   await setMeta(db, 'local_user_id', id);
 }
 
+// Usuario "anónimo" creado en la primera apertura (dueño de los datos anteriores al login).
 export async function getLocalUserId(db) {
   return getMeta(db, 'local_user_id');
+}
+
+// Usuario que tiene la sesión iniciada (null si no hay sesión).
+export async function getCurrentUserId(db) {
+  return getMeta(db, 'current_user_id');
+}
+
+export async function setCurrentUserId(db, id) {
+  if (id) await setMeta(db, 'current_user_id', id);
+  else await db.runAsync("DELETE FROM app_meta WHERE key = 'current_user_id'");
 }
 
 // Importa una sola vez los medicamentos guardados por la versión anterior (AsyncStorage).

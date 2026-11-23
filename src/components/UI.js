@@ -1,16 +1,43 @@
 // Componentes de interfaz reutilizables con el tema verde/blanco.
 import React from 'react';
-import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, TextInput, Image, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDrawer } from '../context/DrawerContext';
+import { useApp } from '../context/AppContext';
 import { colors, radius, font } from '../theme';
 
+// Iniciales de un nombre ("María López" -> "ML").
+export function initialsOf(name) {
+  const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+// Foto redonda del usuario. Sin foto muestra sus iniciales; sin nombre, un icono de persona.
+export function Avatar({ uri, name, size = 40, bg = colors.white, fg = colors.primary }) {
+  const base = { width: size, height: size, borderRadius: size / 2 };
+  if (uri) return <Image source={{ uri }} style={[base, { backgroundColor: colors.primaryLight }]} accessibilityLabel="Foto del usuario" />;
+  const ini = initialsOf(name);
+  return (
+    <View style={[base, { backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }]}>
+      {ini ? (
+        <Text style={{ fontSize: size * 0.4, fontWeight: '800', color: fg }}>{ini}</Text>
+      ) : (
+        <Ionicons name="person" size={size * 0.55} color={fg} />
+      )}
+    </View>
+  );
+}
+
 // Encabezado verde con título y acción a la derecha.
-// Arriba a la izquierda: botón de volver (si hay onBack) o botón del menú lateral (hamburguesa).
+// Arriba a la izquierda: botón de volver (si hay onBack) o la FOTO del usuario con su nombre debajo,
+// que abre el menú lateral.
 export function Header({ title, subtitle, onBack, right }) {
   const insets = useSafeAreaInsets();
   const { open } = useDrawer();
+  const { profile } = useApp();
+  const firstName = (profile?.fullName || '').trim().split(/\s+/)[0];
   return (
     <View style={[s.header, { paddingTop: insets.top + 12 }]}>
       <View style={s.headerRow}>
@@ -20,7 +47,8 @@ export function Header({ title, subtitle, onBack, right }) {
           </TouchableOpacity>
         ) : (
           <TouchableOpacity onPress={open} style={s.menu} accessibilityRole="button" accessibilityLabel="Abrir menú">
-            <Ionicons name="menu" size={32} color={colors.white} />
+            <Avatar uri={profile?.photoUrl} name={profile?.fullName} size={42} />
+            <Text style={s.menuName} numberOfLines={1}>{firstName || 'Menú'}</Text>
           </TouchableOpacity>
         )}
         <View style={{ flex: 1 }}>
@@ -107,7 +135,8 @@ const s = StyleSheet.create({
   headerRow: { flexDirection: 'row', alignItems: 'center' },
   headerTitle: { color: colors.white, fontSize: font.title, fontWeight: '800' },
   headerSub: { color: '#DDF0DE', fontSize: font.small, marginTop: 2 },
-  menu: { width: 44, height: 44, marginLeft: -8, marginRight: 6, alignItems: 'center', justifyContent: 'center' },
+  menu: { width: 64, minHeight: 44, marginLeft: -6, marginRight: 8, alignItems: 'center', justifyContent: 'center' },
+  menuName: { color: '#DDF0DE', fontSize: 11, fontWeight: '700', marginTop: 2, maxWidth: 64 },
   back: { marginRight: 12, paddingVertical: 6 },
   backText: { color: colors.white, fontSize: font.body, fontWeight: '600' },
   btn: {

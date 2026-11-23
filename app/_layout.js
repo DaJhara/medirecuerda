@@ -1,5 +1,6 @@
 // Layout raíz de Expo Router: proveedor de estado global y pila de navegación.
-// Rutas: (tabs) = pestañas principales; med-form, scan, profile, account y settings = pantallas completas.
+// Rutas con sesión: (tabs), med-form, scan, profile, account y settings.
+// Ruta sin sesión: login. Stack.Protected redirige solo cuando la sesión cambia (iniciar / cerrar sesión).
 // DrawerMenu es el menú lateral (se abre desde el encabezado de las pestañas).
 import React from 'react';
 import { View, ActivityIndicator } from 'react-native';
@@ -11,7 +12,7 @@ import DrawerMenu from '../src/components/DrawerMenu';
 import { colors } from '../src/theme';
 
 function RootStack() {
-  const { ready } = useApp();
+  const { ready, session } = useApp();
   // Mientras se cargan los datos guardados se muestra un indicador.
   if (!ready) {
     return (
@@ -23,14 +24,20 @@ function RootStack() {
   return (
     <>
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="med-form" />
-        <Stack.Screen name="scan" />
-        <Stack.Screen name="profile" />
-        <Stack.Screen name="account" />
-        <Stack.Screen name="settings" />
+        <Stack.Protected guard={!!session}>
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="med-form" />
+          <Stack.Screen name="scan" />
+          <Stack.Screen name="profile" />
+          <Stack.Screen name="account" />
+          <Stack.Screen name="settings" />
+        </Stack.Protected>
+        <Stack.Protected guard={!session}>
+          <Stack.Screen name="login" />
+        </Stack.Protected>
       </Stack>
-      <DrawerMenu />
+      {/* El menú lateral solo existe con sesión iniciada */}
+      {session ? <DrawerMenu /> : null}
     </>
   );
 }

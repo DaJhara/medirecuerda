@@ -1,4 +1,4 @@
-// Layout de las pestañas inferiores (Hoy, Medicamentos, Historial).
+// Layout de las pestañas inferiores (Hoy, Medicamentos, Historial y Asistente).
 // Incluye la zona de deslizamiento que abre el menú lateral desde el borde izquierdo.
 import React from 'react';
 import { View } from 'react-native';
@@ -19,7 +19,7 @@ export default function TabsLayout() {
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.muted,
         tabBarLabelStyle: {
-          fontSize: 13,
+          fontSize: 12, // 4 pestañas: texto un poco más pequeño para que quepa "Medicamentos"
           fontWeight: '700',
         },
         tabBarStyle: {
@@ -57,6 +57,16 @@ export default function TabsLayout() {
           title: 'Historial',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="stats-chart-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="assistant"
+        options={{
+          title: 'Asistente',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubbles-outline" size={size} color={color} />
           ),
         }}
       />

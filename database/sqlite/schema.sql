@@ -1,0 +1,83 @@
+-- MediRecuerda · Esquema SQLite (copia local). Generado desde src/db/schema.js: no editar a mano.
+
+CREATE TABLE IF NOT EXISTS app_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+);
+
+-- Perfil: display_name = nombre completo (con apellidos).
+CREATE TABLE IF NOT EXISTS app_users (
+  id           TEXT PRIMARY KEY,
+  display_name TEXT,
+  age          INTEGER,
+  height_cm    REAL,
+  weight_kg    REAL,
+  observations TEXT,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  synced_at    TEXT
+);
+
+-- Medicamento: nombre, dosis y frecuencia, más la identificación hecha por la IA.
+CREATE TABLE IF NOT EXISTS medications (
+  id                     TEXT PRIMARY KEY,
+  user_id                TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  name                   TEXT NOT NULL,
+  active_ingredient      TEXT,
+  dose                   TEXT NOT NULL,
+  frequency_hours        INTEGER NOT NULL CHECK (frequency_hours BETWEEN 1 AND 24),
+  start_at               TEXT NOT NULL,
+  duration_days          INTEGER CHECK (duration_days IS NULL OR duration_days > 0),
+  notes                  TEXT,
+  reference_image_url    TEXT,
+  reference_image_source TEXT,
+  schedule_shift_ms      INTEGER NOT NULL DEFAULT 0,
+  active                 INTEGER NOT NULL DEFAULT 1,
+  created_at             TEXT NOT NULL,
+  updated_at             TEXT NOT NULL,
+  deleted_at             TEXT,
+  synced_at              TEXT
+);
+
+-- Registro de cada toma programada.
+--   scheduled_at : hora inicial planeada (nunca cambia)
+--   due_at       : hora vigente de la toma (cambia al aplazar)
+--   postponed_to : última hora a la que quedó aplazada
+CREATE TABLE IF NOT EXISTS dose_logs (
+  id            TEXT PRIMARY KEY,
+  medication_id TEXT NOT NULL REFERENCES medications(id) ON DELETE CASCADE,
+  scheduled_at  TEXT NOT NULL,
+  due_at        TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','taken','skipped')),
+  dose_taken    TEXT,
+  action_at     TEXT,
+  on_time       INTEGER,
+  snooze_count  INTEGER NOT NULL DEFAULT 0 CHECK (snooze_count BETWEEN 0 AND 2),
+  postponed_to  TEXT,
+  auto_skipped  INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  synced_at     TEXT,
+  UNIQUE (medication_id, scheduled_at)
+);
+
+-- Bitácora: una fila por cada acción (cada aplazamiento queda con su hora de origen y destino).
+CREATE TABLE IF NOT EXISTS dose_events (
+  id              TEXT PRIMARY KEY,
+  dose_log_id     TEXT NOT NULL REFERENCES dose_logs(id) ON DELETE CASCADE,
+  medication_id   TEXT NOT NULL REFERENCES medications(id) ON DELETE CASCADE,
+  event_type      TEXT NOT NULL CHECK (event_type IN ('snoozed','taken','skipped','auto_skipped','undone')),
+  event_at        TEXT NOT NULL,
+  scheduled_at    TEXT NOT NULL,
+  postponed_from  TEXT,
+  postponed_to    TEXT,
+  created_at      TEXT NOT NULL,
+  synced_at       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_meds_user        ON medications(user_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_logs_med_sched   ON dose_logs(medication_id, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_logs_sched       ON dose_logs(scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_logs_pending_due ON dose_logs(due_at) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_events_log       ON dose_events(dose_log_id, event_at);
+CREATE INDEX IF NOT EXISTS idx_logs_unsynced    ON dose_logs(synced_at) WHERE synced_at IS NULL;

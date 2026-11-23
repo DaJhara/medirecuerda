@@ -1,4 +1,4 @@
-// Contexto global: medicamentos y tomas de hoy, leídos de la base de datos SQLite.
+// Contexto global: medicamentos, tomas de hoy, perfil y ajustes, leídos de la base de datos SQLite.
 // Se monta en app/_layout.js para que todas las rutas compartan el mismo estado.
 //
 // Cada acción (Tomé / Aplazar / Omitir / editar...) escribe en la BD, vuelve a leer los datos
@@ -7,7 +7,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { AppState } from 'react-native';
 import * as repo from '../db/repository';
 import { getDb } from '../db/database';
-import { configureNotifications, ensurePermissions, rescheduleAll } from '../services/notifications';
+import { configureNotifications, ensurePermissions, ensureChannel, rescheduleAll } from '../services/notifications';
 import { findReferenceImage } from '../services/imageSearch';
 import { dayKey } from '../utils/time';
 
@@ -19,6 +19,9 @@ export const useApp = () => useContext(AppContext);
 export function AppProvider({ children }) {
   const [meds, setMeds] = useState([]);
   const [todayDoses, setTodayDoses] = useState([]);
+  const [profile, setProfile] = useState({ fullName: '', age: null, heightCm: null, weightKg: null, observations: '' });
+  const [settings, setSettings] = useState({ sound: true, vibrate: true });
+  const settingsRef = useRef(settings); // copia para usarla dentro de callbacks sin quedar desactualizada
   const [ready, setReady] = useState(false);
   const readyRef = useRef(false);
   const lastDay = useRef(dayKey(Date.now()));
@@ -28,7 +31,7 @@ export function AppProvider({ children }) {
     const [m, t, upcoming] = await Promise.all([repo.listMeds(), repo.getTodayDoses(), repo.getUpcomingDoses(60)]);
     setMeds(m);
     setTodayDoses(t);
-    rescheduleAll(upcoming).catch((e) => console.warn('Error reprogramando notificaciones:', e));
+    rescheduleAll(upcoming, settingsRef.current).catch((e) => console.warn('Error reprogramando notificaciones:', e));
   }, []);
 
   // Carga inicial: abre la BD, genera tomas, aplica omisiones pendientes y pide permisos.
@@ -36,6 +39,10 @@ export function AppProvider({ children }) {
     (async () => {
       try {
         await getDb();
+        const savedSettings = await repo.getSettings();
+        settingsRef.current = savedSettings;
+        setSettings(savedSettings);
+        setProfile(await repo.getProfile());
         await repo.ensureDoses();
         await repo.autoSkipExpired();
         await refresh();
@@ -43,7 +50,7 @@ export function AppProvider({ children }) {
         console.warn('Error iniciando la base de datos:', error);
       }
       try {
-        await ensurePermissions();
+        await ensurePermissions(settingsRef.current);
       } catch (error) {
         console.warn('Error configurando notificaciones:', error);
       }
@@ -78,6 +85,22 @@ export function AppProvider({ children }) {
       sub.remove();
     };
   }, [tick]);
+
+  // ---- Perfil ----
+  const saveProfile = useCallback(async (p) => {
+    await repo.saveProfile(p);
+    setProfile(await repo.getProfile());
+  }, []);
+
+  // ---- Ajustes de sonido y vibración: se guardan, se crea el canal y se reprograman los avisos ----
+  const updateSettings = useCallback(async (patch) => {
+    const next = { ...settingsRef.current, ...patch };
+    settingsRef.current = next;
+    setSettings(next);
+    await repo.saveSettings(next);
+    await ensureChannel(next);
+    await refresh();
+  }, [refresh]);
 
   // ---- Acciones sobre tomas (cada una actúa solo sobre SU toma) ----
   const act = (fn) => async (id) => {
@@ -136,7 +159,7 @@ export function AppProvider({ children }) {
   }, [meds, refresh]);
 
   const value = {
-    meds, todayDoses, ready,
+    meds, todayDoses, ready, profile, settings, saveProfile, updateSettings,
     takeDose, skipDose, snoozeDose, undoDose,
     saveMed, saveMany, deleteMed, toggleActive, fetchImage,
   };

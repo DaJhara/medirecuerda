@@ -1,14 +1,18 @@
-
+// Layout de las pestañas inferiores (Hoy, Medicamentos, Historial).
+// Incluye la zona de deslizamiento que abre el menú lateral desde el borde izquierdo.
 import React from 'react';
+import { View } from 'react-native';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../src/theme';
+import DrawerEdgeSwipe from '../../src/components/DrawerEdgeSwipe';
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
 
   return (
+    <View style={{ flex: 1 }}>
     <Tabs
       screenOptions={{
         headerShown: false,
@@ -57,5 +61,7 @@ export default function TabsLayout() {
         }}
       />
     </Tabs>
+    <DrawerEdgeSwipe />
+    </View>
   );
 }

@@ -12,9 +12,14 @@ CREATE TABLE IF NOT EXISTS app_meta (
   value TEXT
 );
 
+-- Perfil: display_name = nombre completo (con apellidos).
 CREATE TABLE IF NOT EXISTS app_users (
   id           TEXT PRIMARY KEY,
   display_name TEXT,
+  age          INTEGER,
+  height_cm    REAL,
+  weight_kg    REAL,
+  observations TEXT,
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL,
   synced_at    TEXT

@@ -22,6 +22,7 @@ async function init() {
   const db = await SQLite.openDatabaseAsync('medirecuerda.db');
   await db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   await db.execAsync(SQLITE_SCHEMA);
+  await migrateSchema(db);
   await ensureLocalUser(db);
   await migrateLegacy(db);
   return db;
@@ -36,6 +37,16 @@ async function setMeta(db, key, value) {
   await db.runAsync('INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)', [key, value]);
 }
 
+// Agrega las columnas nuevas a bases de datos creadas con versiones anteriores
+// (CREATE TABLE IF NOT EXISTS no modifica tablas que ya existen).
+async function migrateSchema(db) {
+  const cols = (await db.getAllAsync('PRAGMA table_info(app_users)')).map((c) => c.name);
+  const wanted = [['age', 'INTEGER'], ['height_cm', 'REAL'], ['weight_kg', 'REAL'], ['observations', 'TEXT']];
+  for (const [name, type] of wanted) {
+    if (!cols.includes(name)) await db.execAsync(`ALTER TABLE app_users ADD COLUMN ${name} ${type}`);
+  }
+}
+
 // Crea el usuario local (un solo usuario por teléfono) y guarda su id.
 async function ensureLocalUser(db) {
   if (await getMeta(db, 'local_user_id')) return;
@@ -43,7 +54,7 @@ async function ensureLocalUser(db) {
   const now = iso(Date.now());
   await db.runAsync(
     'INSERT INTO app_users (id, display_name, created_at, updated_at) VALUES (?, ?, ?, ?)',
-    [id, 'Usuario local', now, now]
+    [id, '', now, now]
   );
   await setMeta(db, 'local_user_id', id);
 }

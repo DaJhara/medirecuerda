@@ -402,6 +402,65 @@ async function getHistoryDayImpl(key) {
 }
 
 // ---------------------------------------------------------------------------
+// Perfil, ajustes y cuenta
+// ---------------------------------------------------------------------------
+const DEFAULT_SETTINGS = { sound: true, vibrate: true };
+
+function mapProfile(u) {
+  return {
+    // Las versiones anteriores guardaban "Usuario local" como nombre; se trata como vacío.
+    fullName: !u?.display_name || u.display_name === 'Usuario local' ? '' : u.display_name,
+    age: u?.age ?? null,
+    heightCm: u?.height_cm ?? null,
+    weightKg: u?.weight_kg ?? null,
+    observations: u?.observations || '',
+  };
+}
+
+async function getProfileImpl() {
+  const db = await getDb();
+  const u = await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [await getLocalUserId(db)]);
+  return mapProfile(u);
+}
+
+// Guarda el perfil y lo deja pendiente de sincronizar (synced_at = NULL).
+async function saveProfileImpl(p) {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE app_users SET display_name=?, age=?, height_cm=?, weight_kg=?, observations=?, updated_at=?, synced_at=NULL
+     WHERE id=?`,
+    [p.fullName.trim(), p.age ?? null, p.heightCm ?? null, p.weightKg ?? null, (p.observations || '').trim(),
+     iso(Date.now()), await getLocalUserId(db)]
+  );
+}
+
+// Preferencias del dispositivo (sonido y vibración). Se guardan en app_meta, no se sincronizan.
+async function getSettingsImpl() {
+  const db = await getDb();
+  const row = await db.getFirstAsync("SELECT value FROM app_meta WHERE key = 'settings'");
+  try {
+    return { ...DEFAULT_SETTINGS, ...(row ? JSON.parse(row.value) : {}) };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+async function saveSettingsImpl(settings) {
+  const db = await getDb();
+  await db.runAsync("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('settings', ?)", [JSON.stringify(settings)]);
+}
+
+// Datos de solo lectura de la cuenta local.
+async function getAccountInfoImpl() {
+  const db = await getDb();
+  const u = await db.getFirstAsync('SELECT id, created_at FROM app_users WHERE id = ?', [await getLocalUserId(db)]);
+  const meds = await db.getFirstAsync('SELECT COUNT(*) AS c FROM medications WHERE deleted_at IS NULL');
+  const logs = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM dose_logs WHERE status <> 'pending'`);
+  const pending = await db.getFirstAsync(`SELECT COUNT(*) AS c FROM dose_logs WHERE synced_at IS NULL AND status <> 'pending'`);
+  return { id: u.id, createdAt: toMs(u.created_at), meds: meds.c, records: logs.c, unsynced: pending.c };
+}
+
+// ---------------------------------------------------------------------------
 // API pública (todas las funciones pasan por la cola)
 // ---------------------------------------------------------------------------
 export const listMeds = () => serial(listMedsImpl);
@@ -419,3 +478,8 @@ export const undoDose = (id) => serial(() => undoDoseImpl(id));
 export const autoSkipExpired = () => serial(autoSkipExpiredImpl);
 export const getMonthMarks = (y, m) => serial(() => getMonthMarksImpl(y, m));
 export const getHistoryDay = (key) => serial(() => getHistoryDayImpl(key));
+export const getProfile = () => serial(getProfileImpl);
+export const saveProfile = (p) => serial(() => saveProfileImpl(p));
+export const getSettings = () => serial(getSettingsImpl);
+export const saveSettings = (s) => serial(() => saveSettingsImpl(s));
+export const getAccountInfo = () => serial(getAccountInfoImpl);

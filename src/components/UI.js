@@ -1,12 +1,16 @@
 // Componentes de interfaz reutilizables con el tema verde/blanco.
 import React from 'react';
 import { View, Text, TouchableOpacity, TextInput, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useDrawer } from '../context/DrawerContext';
 import { colors, radius, font } from '../theme';
 
-// Encabezado verde con título, botón de volver opcional y acción a la derecha.
+// Encabezado verde con título y acción a la derecha.
+// Arriba a la izquierda: botón de volver (si hay onBack) o botón del menú lateral (hamburguesa).
 export function Header({ title, subtitle, onBack, right }) {
   const insets = useSafeAreaInsets();
+  const { open } = useDrawer();
   return (
     <View style={[s.header, { paddingTop: insets.top + 12 }]}>
       <View style={s.headerRow}>
@@ -14,7 +18,11 @@ export function Header({ title, subtitle, onBack, right }) {
           <TouchableOpacity onPress={onBack} style={s.back} accessibilityLabel="Volver">
             <Text style={s.backText}>‹ Volver</Text>
           </TouchableOpacity>
-        ) : null}
+        ) : (
+          <TouchableOpacity onPress={open} style={s.menu} accessibilityRole="button" accessibilityLabel="Abrir menú">
+            <Ionicons name="menu" size={32} color={colors.white} />
+          </TouchableOpacity>
+        )}
         <View style={{ flex: 1 }}>
           <Text style={s.headerTitle}>{title}</Text>
           {subtitle ? <Text style={s.headerSub}>{subtitle}</Text> : null}
@@ -99,6 +107,7 @@ const s = StyleSheet.create({
   headerRow: { flexDirection: 'row', alignItems: 'center' },
   headerTitle: { color: colors.white, fontSize: font.title, fontWeight: '800' },
   headerSub: { color: '#DDF0DE', fontSize: font.small, marginTop: 2 },
+  menu: { width: 44, height: 44, marginLeft: -8, marginRight: 6, alignItems: 'center', justifyContent: 'center' },
   back: { marginRight: 12, paddingVertical: 6 },
   backText: { color: colors.white, fontSize: font.body, fontWeight: '600' },
   btn: {

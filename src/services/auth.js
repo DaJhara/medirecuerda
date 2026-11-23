@@ -75,6 +75,33 @@ export async function loginWithGoogle() {
   return repo.signInGoogleUser(g);
 }
 
+// "Olvidé mi contraseña" (modo local): define una contraseña nueva para la cuenta de este teléfono.
+// OJO: sin servidor no hay forma de verificar el correo por e-mail; con el backend (ver backend/README.md)
+// este paso pasa a ser un código enviado al correo.
+export async function resetPassword({ email, newPassword }) {
+  const e = validateEmail(email) || validatePassword(newPassword);
+  if (e) throw fail('INVALID', e);
+  const acc = await repo.findAccount(email);
+  if (!acc) throw fail('NOT_FOUND', 'No hay una cuenta con ese correo en este teléfono.');
+  if (acc.provider === 'google' && !acc.hash) throw fail('USE_GOOGLE', 'Esta cuenta usa Google: entra con el botón "Continuar con Google".');
+  const salt = newSalt();
+  await repo.setPassword(acc.id, await hashPassword(newPassword, salt), salt);
+}
+
+// Cambiar contraseña con la sesión iniciada (menú): exige la contraseña actual.
+export async function changePassword({ current, newPassword }) {
+  const user = await repo.getSessionUser();
+  if (!user) throw fail('NO_SESSION', 'Inicia sesión de nuevo.');
+  const e = validatePassword(newPassword);
+  if (e) throw fail('INVALID', e);
+  const acc = await repo.findAccount(user.email);
+  if (!acc?.hash) throw fail('USE_GOOGLE', 'Tu cuenta usa Google: no tiene contraseña en MediRecuerda.');
+  if (!safeEqual(await hashPassword(current || '', acc.salt), acc.hash)) throw fail('BAD_CREDENTIALS', 'La contraseña actual no es correcta.');
+  if (current === newPassword) throw fail('INVALID', 'La contraseña nueva debe ser distinta de la actual.');
+  const salt = newSalt();
+  await repo.setPassword(acc.id, await hashPassword(newPassword, salt), salt);
+}
+
 export async function logout() {
   await repo.signOutUser();
   await signOutGoogle();

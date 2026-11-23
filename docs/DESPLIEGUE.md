@@ -14,3 +14,9 @@
 | Tiendas | `eas.json` presente | Íconos finales, política de privacidad, pruebas en dispositivos reales |
 
 Importante: la clave de OpenRouter que se compartió en el chat quedó expuesta; revócala y crea otra.
+
+
+## Actualización: backend para Railway
+La carpeta `backend/` contiene un servidor listo para Railway (Dockerfile, `railway.json`, migraciones, healthcheck).
+Pasos en `backend/README.md`. Con él, las claves de IA salen de la app. Sigue pendiente que la app inicie sesión contra el
+backend (hoy las cuentas son locales) y la sincronización de datos.

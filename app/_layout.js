@@ -31,9 +31,11 @@ function RootStack() {
           <Stack.Screen name="profile" />
           <Stack.Screen name="account" />
           <Stack.Screen name="settings" />
+          <Stack.Screen name="change-password" />
         </Stack.Protected>
         <Stack.Protected guard={!session}>
           <Stack.Screen name="login" />
+          <Stack.Screen name="forgot-password" />
         </Stack.Protected>
       </Stack>
       {/* El menú lateral solo existe con sesión iniciada */}

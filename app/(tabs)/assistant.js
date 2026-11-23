@@ -1,10 +1,10 @@
 // Ruta "/assistant" (pestaña Asistente): chat con la IA limitado a temas médicos y de salud.
 // - Aviso fijo arriba: no reemplaza la asesoría médica.
 // - La restricción de contexto vive en src/services/assistant.js (instrucciones de sistema).
-// - Opcional: el usuario puede compartir su lista de medicamentos como contexto (apagado por defecto,
+// - Opcional: el usuario puede compartir como contexto sus medicamentos y datos de perfil (edad, estatura, peso, observaciones) (apagado por defecto,
 //   porque esos datos se envían al servicio de IA).
-import React, { useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Switch } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, FlatList, Keyboard, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../src/components/UI';
 import { colors, font, radius } from '../../src/theme';
@@ -20,9 +20,7 @@ const WELCOME = {
 };
 
 const SUGGESTIONS = [
-  '¿Qué hago si olvidé una dosis?',
-  '¿Puedo tomar mi medicamento con el estómago vacío?',
-  '¿Qué efectos secundarios son comunes con los antihipertensivos?',
+  '¿Qué hago si olvidé una dosis?'
 ];
 
 let counter = 0;
@@ -36,14 +34,28 @@ export default function AssistantScreen() {
   const [useContext, setUseContext] = useState(false);
   const listRef = useRef(null);
 
-  // Texto con los medicamentos activos (solo si el usuario lo permite).
+  // Texto de contexto (solo si el usuario lo permite): datos del perfil + medicamentos activos.
+  // No se envían nombre, correo ni foto.
   const contextText = useMemo(() => {
     if (!useContext) return null;
     const active = meds.filter((m) => m.active);
     const lines = active.map((m) => `- ${m.name}${m.activeIngredient ? ` (${m.activeIngredient})` : ''}: ${m.dose}, ${fmtInterval(m.intervalHours).toLowerCase()}`);
-    const age = profile.age ? `Edad: ${profile.age} años.\n` : '';
-    return `${age}Medicamentos activos:\n${lines.length ? lines.join('\n') : '(ninguno registrado)'}`;
-  }, [useContext, meds, profile.age]);
+    const data = [
+      profile.age ? `Edad: ${profile.age} años` : null,
+      profile.heightCm ? `Estatura: ${profile.heightCm} cm` : null,
+      profile.weightKg ? `Peso: ${profile.weightKg} kg` : null,
+      profile.heightCm && profile.weightKg ? `IMC aproximado: ${(profile.weightKg / (profile.heightCm / 100) ** 2).toFixed(1)}` : null,
+      profile.observations ? `Observaciones (condiciones, alergias): ${profile.observations}` : null,
+    ].filter(Boolean);
+    return `Datos del usuario:\n${data.length ? data.join('\n') : '(sin datos de perfil)'}\n\nMedicamentos activos:\n${lines.length ? lines.join('\n') : '(ninguno registrado)'}`;
+  }, [useContext, meds, profile]);
+
+  // Al abrir el teclado, la lista baja hasta el último mensaje para que se vea junto a la caja de texto.
+  useEffect(() => {
+    const ev = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const sub = Keyboard.addListener(ev, () => setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 60));
+    return () => sub.remove();
+  }, []);
 
   const scrollEnd = () => setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
 
@@ -92,7 +104,8 @@ export default function AssistantScreen() {
         </Text>
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* El contenedor se encoge cuando aparece el teclado, así la caja de texto nunca queda tapada */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <FlatList
           ref={listRef}
           data={messages}
@@ -136,15 +149,15 @@ export default function AssistantScreen() {
         {/* Compartir medicamentos como contexto (opcional) */}
         <View style={s.ctxRow}>
           <View style={{ flex: 1, paddingRight: 10 }}>
-            <Text style={s.ctxTitle}>Usar mis medicamentos como contexto</Text>
-            <Text style={s.ctxDesc}>{useContext ? 'Se envía tu lista de medicamentos al asistente.' : 'Apagado: el asistente no ve tus datos.'}</Text>
+            <Text style={s.ctxTitle}>Usar mis datos y medicamentos como contexto</Text>
+            <Text style={s.ctxDesc}>{useContext ? 'Se envían tu edad, estatura, peso, observaciones y medicamentos.' : 'Apagado: el asistente no ve tus datos.'}</Text>
           </View>
           <Switch
             value={useContext}
             onValueChange={setUseContext}
             trackColor={{ true: colors.primaryMid, false: '#CCCCCC' }}
             thumbColor={useContext ? colors.primary : '#F4F4F4'}
-            accessibilityLabel="Usar mis medicamentos como contexto"
+            accessibilityLabel="Usar mis datos y medicamentos como contexto"
           />
         </View>
 

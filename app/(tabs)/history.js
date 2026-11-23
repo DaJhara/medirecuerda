@@ -1,10 +1,10 @@
 // Ruta "/history" (pestaña Historial).
 // - Arriba: gráfica de barras con el comportamiento de los últimos 7 días (tomadas / omitidas / sin respuesta).
-// - Icono de filtro (encabezado): despliega un calendario para elegir otra fecha.
+// - Icono de filtro (encabezado): abre un selector de fecha emergente y pequeño (ventana flotante) para elegir otra fecha.
 // - Abajo: detalle del día elegido, por medicamento (se despliega al tocarlo).
 // Cada vez que se vuelve a esta pestaña, la fecha elegida y el calendario se reinician al día de HOY.
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Modal, Pressable } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header, Card, Badge } from '../../src/components/UI';
@@ -17,8 +17,8 @@ import { useApp } from '../../src/context/AppContext';
 const WEEKDAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 const BAR_AREA = 120; // alto máximo de las barras (px)
 const C_TAKEN = colors.primary;
-const C_SKIPPED = colors.warn;
-const C_MISSED = '#B0BEC5';
+const C_SKIPPED = colors.primaryMid; // verde claro (en sintonía con la paleta)
+const C_MISSED = '#CFD8DC';
 
 // Texto, etiqueta y color de una toma según su estado.
 function describe(d, now) {
@@ -30,8 +30,8 @@ function describe(d, now) {
     return {
       title: `Tomada a las ${fmtTime(d.actionAt)}`,
       tag: d.onTime ? 'A tiempo' : 'Con retraso',
-      tagColor: d.onTime ? colors.primaryDark : colors.warn,
-      tagBg: d.onTime ? colors.primaryLight : colors.warnBg,
+      tagColor: d.onTime ? colors.primaryDark : colors.leaf,
+      tagBg: d.onTime ? colors.primaryLight : colors.leafBg,
       extra: [d.doseTaken ? `Dosis tomada: ${d.doseTaken}` : null, snooze].filter(Boolean),
     };
   }
@@ -107,6 +107,7 @@ export default function HistoryScreen() {
   const weeks = [];
   for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
 
+  const isCurrentMonth = cursor.year === now0.getFullYear() && cursor.month === now0.getMonth();
   const monthLabel = first.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
   const selectedLabel =
     selected === todayKey
@@ -127,44 +128,6 @@ export default function HistoryScreen() {
         }
       />
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 30 }}>
-        {/* Calendario desplegable (filtro por fecha) */}
-        {calOpen && (
-          <Card style={{ borderColor: colors.primaryMid }}>
-            <View style={s.monthRow}>
-              <TouchableOpacity onPress={() => changeMonth(-1)} style={s.nav} accessibilityLabel="Mes anterior">
-                <Ionicons name="chevron-back" size={26} color={colors.primary} />
-              </TouchableOpacity>
-              <Text style={s.month}>{monthLabel}</Text>
-              <TouchableOpacity onPress={() => changeMonth(1)} style={s.nav} accessibilityLabel="Mes siguiente">
-                <Ionicons name="chevron-forward" size={26} color={colors.primary} />
-              </TouchableOpacity>
-            </View>
-            <View style={s.week}>
-              {WEEKDAYS.map((w) => <Text key={w} style={s.weekday}>{w}</Text>)}
-            </View>
-            {weeks.map((wk, wi) => (
-              <View key={wi} style={s.week}>
-                {wk.map((day, di) => {
-                  if (!day) return <View key={di} style={s.cell} />;
-                  const key = `${cursor.year}-${String(cursor.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const isSel = key === selected;
-                  return (
-                    <TouchableOpacity key={di} style={s.cell} onPress={() => pickDay(key)} accessibilityLabel={`Día ${day}`}>
-                      <View style={[s.day, key === todayKey && { borderColor: colors.primary }, isSel && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
-                        <Text style={[s.dayText, isSel && { color: colors.white }]}>{day}</Text>
-                      </View>
-                      <View style={[s.dot, marks.includes(key) && { backgroundColor: isSel ? colors.primaryDark : colors.primary }]} />
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ))}
-            <TouchableOpacity onPress={() => pickDay(todayKey)} style={s.todayBtn} accessibilityRole="button">
-              <Text style={s.todayText}>Ir a hoy</Text>
-            </TouchableOpacity>
-          </Card>
-        )}
-
         {/* Gráfica de los últimos 7 días */}
         <Card>
           <View style={s.chartHead}>
@@ -262,6 +225,53 @@ export default function HistoryScreen() {
           );
         })}
       </ScrollView>
+
+      {/* Selector de fecha emergente: ventana pequeña y centrada sobre un fondo atenuado */}
+      <Modal transparent visible={calOpen} animationType="fade" onRequestClose={() => setCalOpen(false)} statusBarTranslucent>
+        <View style={s.overlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCalOpen(false)} accessibilityLabel="Cerrar selector de fecha" />
+          <View style={s.popup}>
+            <View style={s.monthRow}>
+              <TouchableOpacity onPress={() => changeMonth(-1)} style={s.nav} accessibilityLabel="Mes anterior">
+                <Ionicons name="chevron-back" size={24} color={colors.primary} />
+              </TouchableOpacity>
+              <Text style={s.month}>{monthLabel}</Text>
+              <TouchableOpacity onPress={() => changeMonth(1)} disabled={isCurrentMonth} style={[s.nav, isCurrentMonth && { opacity: 0.25 }]} accessibilityLabel="Mes siguiente">
+                <Ionicons name="chevron-forward" size={24} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+            <View style={s.week}>
+              {WEEKDAYS.map((w) => <Text key={w} style={s.weekday}>{w}</Text>)}
+            </View>
+            {weeks.map((wk, wi) => (
+              <View key={wi} style={s.week}>
+                {wk.map((day, di) => {
+                  if (!day) return <View key={di} style={s.cell} />;
+                  const key = `${cursor.year}-${String(cursor.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                  const isSel = key === selected;
+                  const future = key > todayKey; // no hay historial de días futuros
+                  return (
+                    <TouchableOpacity key={di} style={s.cell} disabled={future} onPress={() => pickDay(key)} accessibilityLabel={`Día ${day}`}>
+                      <View style={[s.day, key === todayKey && { borderColor: colors.primary }, isSel && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
+                        <Text style={[s.dayText, isSel && { color: colors.white }, future && { color: '#B8C4BA' }]}>{day}</Text>
+                      </View>
+                      <View style={[s.dot, marks.includes(key) && { backgroundColor: isSel ? colors.primaryDark : colors.primary }]} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))}
+            <View style={s.popupActions}>
+              <TouchableOpacity onPress={() => setCalOpen(false)} style={s.actionBtn} accessibilityRole="button">
+                <Text style={[s.todayText, { color: colors.muted }]}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => pickDay(todayKey)} style={s.actionBtn} accessibilityRole="button">
+                <Text style={s.todayText}>Hoy</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -269,18 +279,21 @@ export default function HistoryScreen() {
 const s = StyleSheet.create({
   filter: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   filterDot: { position: 'absolute', top: 8, right: 8, width: 10, height: 10, borderRadius: 5, backgroundColor: '#FFEB3B', borderWidth: 1, borderColor: colors.primary },
-  // Calendario
+  // Selector de fecha emergente
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  popup: { width: '100%', maxWidth: 330, backgroundColor: colors.white, borderRadius: radius.lg, padding: 12, elevation: 12, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
+  popupActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
+  actionBtn: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 14 },
   monthRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   nav: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  month: { fontSize: 19, fontWeight: '800', color: colors.primaryDark, textTransform: 'capitalize' },
+  month: { fontSize: 17, fontWeight: '800', color: colors.primaryDark, textTransform: 'capitalize' },
   week: { flexDirection: 'row' },
   weekday: { flex: 1, textAlign: 'center', fontSize: 14, fontWeight: '800', color: colors.muted, paddingVertical: 6 },
-  cell: { flex: 1, alignItems: 'center', paddingVertical: 3 },
-  day: { width: 38, height: 38, borderRadius: 19, borderWidth: 2, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
-  dayText: { fontSize: 16, fontWeight: '700', color: colors.text },
+  cell: { flex: 1, alignItems: 'center', paddingVertical: 2 },
+  day: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
+  dayText: { fontSize: 15, fontWeight: '700', color: colors.text },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'transparent', marginTop: 2 },
-  todayBtn: { alignSelf: 'center', minHeight: 44, justifyContent: 'center', paddingHorizontal: 16, marginTop: 4 },
-  todayText: { fontSize: 16, fontWeight: '800', color: colors.primary },
+  todayText: { fontSize: 15, fontWeight: '800', color: colors.primary },
   // Gráfica
   chartHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   chartTitle: { fontSize: 19, fontWeight: '800', color: colors.primaryDark },

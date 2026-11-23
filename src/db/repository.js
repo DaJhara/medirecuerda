@@ -548,6 +548,40 @@ async function findAccountImpl(email) {
   return r ? { id: r.id, provider: r.auth_provider, hash: r.password_hash, salt: r.password_salt } : null;
 }
 
+// Cambia la contraseña local de un usuario (nuevo hash y sal). Si no tenía credencial local, la crea.
+async function setPasswordImpl(userId, hash, salt) {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO local_credentials (user_id, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET password_hash = excluded.password_hash, password_salt = excluded.password_salt`,
+    [userId, hash, salt, iso(Date.now())]
+  );
+  await db.runAsync('UPDATE app_users SET updated_at = ? WHERE id = ?', [iso(Date.now()), userId]);
+}
+
+// Tratamientos con duración que ya terminaron: se eliminan de la lista (borrado lógico, el historial se conserva).
+// Condición: pasó la fecha final Y no queda ninguna toma futura o aplazada pendiente.
+// Devuelve los nombres eliminados.
+async function purgeFinishedImpl() {
+  const db = await getDb();
+  const uid = await getCurrentUserId(db);
+  if (!uid) return [];
+  const nowMs = Date.now();
+  const rows = await db.getAllAsync(
+    'SELECT id, name, start_at, duration_days FROM medications WHERE deleted_at IS NULL AND duration_days IS NOT NULL AND user_id = ?', [uid]);
+  const done = [];
+  for (const m of rows) {
+    if (Date.parse(m.start_at) + m.duration_days * DAY > nowMs) continue; // aún dentro del tratamiento
+    const open = await db.getFirstAsync(
+      `SELECT COUNT(*) AS c FROM dose_logs WHERE medication_id = ? AND status = 'pending' AND due_at > ?`, [m.id, iso(nowMs)]);
+    if (open.c > 0) continue; // queda una toma por responder o aplazada
+    const stamp = iso(nowMs);
+    await db.runAsync('UPDATE medications SET deleted_at = ?, active = 0, updated_at = ? WHERE id = ?', [stamp, stamp, m.id]);
+    done.push(m.name);
+  }
+  return done;
+}
+
 async function startSessionImpl(userId) {
   const db = await getDb();
   await setCurrentUserId(db, userId);
@@ -636,6 +670,8 @@ export const getHistoryDay = (key) => serial(() => getHistoryDayImpl(key));
 export const getSessionUser = () => serial(getSessionUserImpl);
 export const createPasswordAccount = (d) => serial(() => createPasswordAccountImpl(d));
 export const findAccount = (email) => serial(() => findAccountImpl(email));
+export const setPassword = (id, hash, salt) => serial(() => setPasswordImpl(id, hash, salt));
+export const purgeFinishedMeds = () => serial(purgeFinishedImpl);
 export const startSession = (id) => serial(() => startSessionImpl(id));
 export const signInGoogleUser = (g) => serial(() => signInGoogleUserImpl(g));
 export const signOutUser = () => serial(signOutImpl);

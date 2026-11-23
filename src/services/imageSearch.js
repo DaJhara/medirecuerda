@@ -8,6 +8,8 @@
 // La imagen es solo una guía visual: puede no coincidir con la presentación exacta que
 // entrega tu droguería. El usuario siempre debe confiar en su fórmula médica.
 
+import { api, hasBackend } from './api';
+
 const SERPER_KEY = process.env.EXPO_PUBLIC_IMAGE_SEARCH_KEY;
 
 // Dominios de droguerías y cadenas colombianas (se priorizan en los resultados).
@@ -71,6 +73,12 @@ export async function findReferenceImage({ name, activeIngredient, strength, for
     .filter(Boolean)
     .join(' ');
   try {
+    if (hasBackend()) {
+      // El backend aplica Serper (con su clave) y Wikimedia como respaldo.
+      const q = new URLSearchParams({ name, activeIngredient: activeIngredient || '', strength: strength || '', form: form || '' });
+      const r = await api(`/images/search?${q}`, { timeout: 20000 });
+      return r?.url ? r : null;
+    }
     if (SERPER_KEY) {
       const r = await searchSerper(`${base} Colombia droguería`);
       if (r) return r;

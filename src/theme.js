@@ -11,6 +11,8 @@ export const colors = {
   danger: '#C62828',
   warn: '#EF6C00',
   warnBg: '#FFF3E0',
+  leaf: '#558B2F',         // verde lima (estados intermedios: omitida, con retraso)
+  leafBg: '#F1F8E9',
   white: '#FFFFFF',
 };
 

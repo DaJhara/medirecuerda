@@ -6,7 +6,7 @@
 //
 // El módulo se carga con require() dentro de la función para que la app no se caiga
 // al abrir si todavía no está instalado o compilado en el dev build.
-import { Platform } from 'react-native';
+import { Platform, TurboModuleRegistry } from 'react-native';
 
 const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
 const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
@@ -17,7 +17,21 @@ export const isGoogleConfigured = () => !!WEB_CLIENT_ID;
 // Error con código para que la pantalla muestre un mensaje claro.
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
+// ¿Está el módulo nativo dentro de esta compilación? TurboModuleRegistry.get() devuelve null si falta
+// (a diferencia de getEnforcing, que lanza "RNGoogleSignin could not be found"). Así ni siquiera se carga
+// el paquete JavaScript, que es lo que provocaba el error rojo al cerrar sesión.
+const hasNativeModule = () => {
+  try {
+    return Platform.OS !== 'web' && !!TurboModuleRegistry.get('RNGoogleSignin');
+  } catch {
+    return false;
+  }
+};
+
 function loadModule() {
+  if (!hasNativeModule()) {
+    throw fail('NO_MODULE', 'Esta compilación de la app no incluye Google. Genera de nuevo el development build (ver docs/LOGIN_GOOGLE.md).');
+  }
   try {
     return require('@react-native-google-signin/google-signin');
   } catch {
@@ -65,6 +79,7 @@ export async function signInWithGoogle() {
 
 // Cierra la sesión también en Google (para que la próxima vez deje elegir otra cuenta).
 export async function signOutGoogle() {
+  if (!hasNativeModule()) return; // sin módulo nativo no hay sesión de Google que cerrar
   try {
     const { GoogleSignin } = loadModule();
     await GoogleSignin.signOut();

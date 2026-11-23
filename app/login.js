@@ -4,6 +4,7 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button, Field } from '../src/components/UI';
 import { colors, font, radius } from '../src/theme';
@@ -21,6 +22,7 @@ function googleMessage(e) {
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { signIn, signUp, signInGoogle } = useApp();
 
   const [mode, setMode] = useState('login'); // 'login' | 'register'
@@ -115,6 +117,13 @@ export default function LoginScreen() {
           <Text style={s.showPassText}>{showPass ? 'Ocultar contraseña' : 'Mostrar contraseña'}</Text>
         </TouchableOpacity>
 
+        {/* Solo al iniciar sesión: abre el formulario para recuperar la contraseña */}
+        {!isRegister && (
+          <TouchableOpacity onPress={() => router.push('/forgot-password')} style={s.forgot} accessibilityRole="link" accessibilityLabel="Olvidé mi contraseña">
+            <Text style={s.forgotText}>Olvidé mi contraseña</Text>
+          </TouchableOpacity>
+        )}
+
         {error ? (
           <View style={s.error} accessibilityLiveRegion="polite">
             <Ionicons name="alert-circle" size={20} color={colors.danger} />
@@ -158,6 +167,8 @@ const s = StyleSheet.create({
   tabText: { fontSize: 16, fontWeight: '800', color: colors.primaryDark },
   showPass: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, marginTop: -6, marginBottom: 6 },
   showPassText: { fontSize: 15, fontWeight: '700', color: colors.primary },
+  forgot: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', marginBottom: 6 },
+  forgotText: { fontSize: 16, fontWeight: '800', color: colors.primary, textDecorationLine: 'underline' },
   error: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#FDECEA', borderRadius: radius.sm, padding: 12, marginBottom: 14 },
   errorText: { flex: 1, fontSize: 15, color: colors.danger, lineHeight: 21 },
   or: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 20 },

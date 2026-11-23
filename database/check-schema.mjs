@@ -127,6 +127,11 @@ for (const i of Object.keys(pg.indexes)) {
   if (!sq.indexes[i]) errors.push(`Índice "${i}": está en PostgreSQL pero falta en SQLite.`);
 }
 
+// ---- 3) La migración inicial del backend es copia exacta del esquema de PostgreSQL ----
+if (read('backend/migrations/001_init.sql') !== read('database/postgres/schema.sql')) {
+  errors.push('backend/migrations/001_init.sql no es igual a database/postgres/schema.sql (cópialo: cp database/postgres/schema.sql backend/migrations/001_init.sql).');
+}
+
 if (errors.length) {
   console.error(`✗ ${errors.length} diferencia(s):\n - ` + errors.join('\n - '));
   process.exit(1);

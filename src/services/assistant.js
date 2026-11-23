@@ -4,7 +4,10 @@
 // cualquier tema que no sea de salud. Es una barrera de "mejor esfuerzo": ningún prompt es
 // infalible, y los modelos gratuitos son más fáciles de desviar que los de pago.
 //
-// IMPORTANTE (prototipo): la clave viaja dentro de la app. En producción, haz esta llamada desde un backend.
+// Con backend (EXPO_PUBLIC_API_URL) la pregunta va a POST /ai/chat y la clave queda en el servidor,
+// donde se aplican las mismas instrucciones de sistema (backend/src/prompts.js). Sin backend, llama directo (solo pruebas).
+
+import { api, hasBackend } from './api';
 
 const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY;
@@ -32,6 +35,11 @@ FORMATO: respuestas cortas (máximo 150 palabras), en texto plano, sin Markdown,
 
 // messages: [{ role: 'user' | 'assistant', content }]. context (opcional): texto con los medicamentos del usuario.
 export async function askAssistant(messages, context) {
+  if (hasBackend()) {
+    const out = await api('/ai/chat', { method: 'POST', body: { messages: messages.slice(-MAX_HISTORY), context: context || null } });
+    if (!out?.reply) throw new Error('El asistente no devolvió respuesta. Intenta de nuevo.');
+    return out.reply;
+  }
   if (!API_KEY) throw new Error('Falta la clave de OpenRouter. Revisa el archivo .env y reinicia con "npx expo start -c".');
 
   const system = context

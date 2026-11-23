@@ -16,6 +16,7 @@ import { colors, font } from '../theme';
 const ITEMS = [
   { label: 'Perfil', icon: 'person-outline', path: '/profile' },
   { label: 'Cuenta', icon: 'shield-checkmark-outline', path: '/account' },
+  { label: 'Cambiar contraseña', icon: 'key-outline', path: '/change-password' },
   { label: 'Configuraciones', icon: 'settings-outline', path: '/settings' },
 ];
 

@@ -46,6 +46,7 @@ export function AppProvider({ children }) {
     setProfile(await repo.getProfile());
     await repo.ensureDoses();
     await repo.autoSkipExpired();
+    await repo.purgeFinishedMeds(); // quita los tratamientos cuya duración ya terminó
     await refresh();
   }, [refresh]);
 
@@ -77,12 +78,13 @@ export function AppProvider({ children }) {
     if (!readyRef.current || !sessionRef.current) return;
     try {
       const skipped = await repo.autoSkipExpired();
+      const finished = await repo.purgeFinishedMeds(); // tratamientos que acaban de terminar
       const today = dayKey(Date.now());
       if (today !== lastDay.current) {
         lastDay.current = today;
         await repo.ensureDoses();
         await refresh();
-      } else if (skipped > 0) {
+      } else if (skipped > 0 || finished.length > 0) {
         await refresh();
       }
     } catch (e) {

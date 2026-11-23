@@ -5,6 +5,8 @@
 // variables EXPO_PUBLIC_* en el paquete. Para producción, mueve esta llamada a un
 // backend propio (p. ej. Node.js) que guarde la clave.
 
+import { api, hasBackend } from './api';
+
 const API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const API_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY;
 const MODEL = process.env.EXPO_PUBLIC_OPENROUTER_MODEL || 'openrouter/free';
@@ -26,6 +28,12 @@ Reglas:
 
 // Llama al modelo. Recibe { text, imageBase64, mime } (al menos uno).
 export async function analyzePrescription({ text, imageBase64, mime = 'image/jpeg' }) {
+  // Con backend: POST /ai/extract devuelve el texto del modelo y aquí se normaliza igual que sin backend.
+  if (hasBackend()) {
+    const out = await api('/ai/extract', { method: 'POST', body: { text, imageBase64, mime } });
+    if (!out?.content) throw new Error('La IA no devolvió contenido. Intenta de nuevo.');
+    return parseMedications(out.content);
+  }
   if (!API_KEY) {
     throw new Error('Falta la clave de OpenRouter. Revisa el archivo .env y reinicia con "npx expo start -c".');
   }

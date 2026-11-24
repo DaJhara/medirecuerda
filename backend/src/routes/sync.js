@@ -1,5 +1,9 @@
-// Sincronización de respaldo: los IDs de medicamentos, tomas y eventos se conservan.
-// El usuario remoto se obtiene exclusivamente del JWT; nunca se acepta user_id del cliente.
+// Sincronización en dos sentidos. La base de datos del servidor es la fuente principal; SQLite del teléfono
+// es la copia de trabajo/respaldo cuando no hay conexión.
+//   POST /sync/push  teléfono → servidor (cambios hechos con o sin conexión)
+//   GET  /sync/pull  servidor → teléfono (lo que cambió desde la última descarga)
+// Conflictos: gana el cambio con "updated_at" más reciente (último en escribir); en empate gana el servidor.
+// Los IDs de medicamentos, tomas y eventos se conservan. El usuario se obtiene SOLO del JWT.
 import { Router } from 'express';
 import { getPool, query } from '../db.js';
 import { requireUser } from '../middleware/security.js';
@@ -46,10 +50,10 @@ router.post('/push', async (req, res, next) => {
     if (profile && typeof profile === 'object') {
       await client.query(
         `UPDATE app_users SET display_name=$2, photo_url=$3, age=$4, height_cm=$5,
-           weight_kg=$6, observations=$7, updated_at=now() WHERE id=$1`,
+           weight_kg=$6, observations=$7, updated_at=$8 WHERE id=$1 AND updated_at <= $8`,
         [req.user.id, profile.display_name || '', profile.photo_url || null,
           profile.age ?? null, profile.height_cm ?? null, profile.weight_kg ?? null,
-          profile.observations || '']
+          profile.observations || '', dateOrNull(profile.updated_at) || new Date().toISOString()]
       );
     }
     let medsSaved = 0;
@@ -73,8 +77,8 @@ router.post('/push', async (req, res, next) => {
            duration_days=EXCLUDED.duration_days, notes=EXCLUDED.notes,
            reference_image_url=EXCLUDED.reference_image_url, reference_image_source=EXCLUDED.reference_image_source,
            schedule_shift_ms=EXCLUDED.schedule_shift_ms, active=EXCLUDED.active,
-           updated_at=EXCLUDED.updated_at, deleted_at=EXCLUDED.deleted_at
-         WHERE medications.user_id=EXCLUDED.user_id`,
+           updated_at=EXCLUDED.updated_at, deleted_at=EXCLUDED.deleted_at, server_updated_at=now()
+         WHERE medications.user_id=EXCLUDED.user_id AND medications.updated_at < EXCLUDED.updated_at`,
         [m.id, req.user.id, m.name, m.active_ingredient || null, m.dose, Number(m.frequency_hours),
           dateOrNull(m.start_at), m.duration_days ?? null, m.notes || null,
           m.reference_image_url || null, m.reference_image_source || null,
@@ -82,6 +86,14 @@ router.post('/push', async (req, res, next) => {
           dateOrNull(m.updated_at), dateOrNull(m.deleted_at)]
       );
       medsSaved += r.rowCount;
+      // Si este cambio de medicamento fue aceptado, las tomas PENDIENTES más viejas que él y que el teléfono ya no
+      // tiene (porque cambió el horario) se descartan también aquí, para que no regresen en la próxima descarga.
+      if (r.rowCount === 1) {
+        const keep = doseLogs.filter((d) => d.medication_id === m.id).map((d) => d.id);
+        await client.query(
+          `DELETE FROM dose_logs WHERE medication_id=$1 AND status='pending' AND created_at < $2 AND NOT (id = ANY($3::uuid[]))`,
+          [m.id, dateOrNull(m.updated_at), keep]);
+      }
     }
 
     // Después las tomas. Solo se aceptan si el medicamento pertenece a este usuario.
@@ -89,18 +101,32 @@ router.post('/push', async (req, res, next) => {
       if (!validId(d.medication_id) || !d.scheduled_at || !d.due_at || !['pending','taken','skipped'].includes(d.status)) {
         throw Object.assign(new Error('Hay un registro de toma con datos no válidos.'), { status: 400 });
       }
+      // Choque por horario: otro dispositivo ya generó la toma de ese mismo medicamento y hora con otro id.
+      // Gana la fila con updated_at más reciente (en empate, la del servidor).
+      const clash = await client.query(
+        `SELECT x.id, x.updated_at FROM dose_logs x JOIN medications m ON m.id = x.medication_id
+         WHERE x.medication_id=$1 AND x.scheduled_at=$2 AND x.id<>$3 AND m.user_id=$4`,
+        [d.medication_id, dateOrNull(d.scheduled_at), d.id, req.user.id]);
+      if (clash.rows[0]) {
+        if (new Date(clash.rows[0].updated_at) < new Date(d.updated_at)) {
+          await client.query('DELETE FROM dose_logs WHERE id=$1', [clash.rows[0].id]);
+        } else continue;
+      }
       const r = await client.query(
         `INSERT INTO dose_logs
           (id, medication_id, scheduled_at, due_at, status, dose_taken, action_at, on_time,
            snooze_count, postponed_to, auto_skipped, created_at, updated_at)
-         SELECT $1, m.id, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+         SELECT $1, m.id, $3, $4, $5::dose_status, $6, $7, $8, $9, $10, $11, $12, $13
          FROM medications m WHERE m.id=$2 AND m.user_id=$14
+           -- una toma pendiente de un horario anterior al último cambio del medicamento no se acepta
+           AND ($5::text <> 'pending' OR $12::timestamptz >= m.updated_at
+                OR EXISTS (SELECT 1 FROM dose_logs x WHERE x.id=$1))
          ON CONFLICT (id) DO UPDATE SET
            scheduled_at=EXCLUDED.scheduled_at, due_at=EXCLUDED.due_at, status=EXCLUDED.status,
            dose_taken=EXCLUDED.dose_taken, action_at=EXCLUDED.action_at, on_time=EXCLUDED.on_time,
            snooze_count=EXCLUDED.snooze_count, postponed_to=EXCLUDED.postponed_to,
-           auto_skipped=EXCLUDED.auto_skipped, updated_at=EXCLUDED.updated_at
-         WHERE dose_logs.medication_id=EXCLUDED.medication_id`,
+           auto_skipped=EXCLUDED.auto_skipped, updated_at=EXCLUDED.updated_at, server_updated_at=now()
+         WHERE dose_logs.medication_id=EXCLUDED.medication_id AND dose_logs.updated_at < EXCLUDED.updated_at`,
         [d.id, d.medication_id, dateOrNull(d.scheduled_at), dateOrNull(d.due_at), d.status,
           d.dose_taken || null, dateOrNull(d.action_at), d.on_time == null ? null : !!d.on_time,
           Number(d.snooze_count || 0), dateOrNull(d.postponed_to), !!d.auto_skipped,
@@ -117,7 +143,7 @@ router.post('/push', async (req, res, next) => {
       const r = await client.query(
         `INSERT INTO dose_events
           (id, dose_log_id, medication_id, event_type, event_at, scheduled_at, postponed_from, postponed_to, created_at)
-         SELECT $1, d.id, m.id, $4, $5, $6, $7, $8, $9
+         SELECT $1, d.id, m.id, $4::dose_event_type, $5, $6, $7, $8, $9
          FROM medications m JOIN dose_logs d ON d.id=$2 AND d.medication_id=m.id
          WHERE m.id=$3 AND m.user_id=$10
          ON CONFLICT (id) DO NOTHING`,
@@ -136,6 +162,42 @@ router.post('/push', async (req, res, next) => {
   } finally {
     client.release();
   }
+});
+
+// Descarga: devuelve lo que el servidor guardó o cambió después de "since" (fecha del servidor devuelta en la
+// descarga anterior). Sin "since" devuelve todo (primer inicio de sesión o instalación nueva).
+// Se incluyen los medicamentos eliminados (deleted_at) para que la eliminación llegue a los demás dispositivos.
+router.get('/pull', async (req, res, next) => {
+  try {
+    let since = null;
+    if (req.query.since) {
+      const t = new Date(String(req.query.since));
+      if (Number.isNaN(t.getTime())) return bad(res, 400, 'La fecha "since" no es válida.');
+      since = t.toISOString();
+    }
+    const uid = req.user.id;
+    // Se toma la hora del servidor ANTES de leer: lo que cambie durante la lectura se vuelve a enviar la próxima vez.
+    const serverTime = (await query('SELECT now() AS t')).rows[0].t.toISOString();
+
+    const profile = (await query(
+      `SELECT display_name, photo_url, age, height_cm, weight_kg, observations, updated_at FROM app_users WHERE id=$1`, [uid])).rows[0] || null;
+    const medications = (await query(
+      `SELECT id, name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
+              reference_image_url, reference_image_source, schedule_shift_ms, active, created_at, updated_at, deleted_at
+       FROM medications WHERE user_id=$1 AND ($2::timestamptz IS NULL OR server_updated_at > $2) ORDER BY created_at`, [uid, since])).rows;
+    const doseLogs = (await query(
+      `SELECT d.id, d.medication_id, d.scheduled_at, d.due_at, d.status, d.dose_taken, d.action_at, d.on_time,
+              d.snooze_count, d.postponed_to, d.auto_skipped, d.created_at, d.updated_at
+       FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+       WHERE m.user_id=$1 AND ($2::timestamptz IS NULL OR d.server_updated_at > $2) ORDER BY d.scheduled_at`, [uid, since])).rows;
+    const doseEvents = (await query(
+      `SELECT e.id, e.dose_log_id, e.medication_id, e.event_type, e.event_at, e.scheduled_at,
+              e.postponed_from, e.postponed_to, e.created_at
+       FROM dose_events e JOIN medications m ON m.id = e.medication_id
+       WHERE m.user_id=$1 AND ($2::timestamptz IS NULL OR e.server_updated_at > $2) ORDER BY e.event_at`, [uid, since])).rows;
+
+    res.json({ ok: true, serverTime, profile, medications, doseLogs, doseEvents });
+  } catch (e) { next(e); }
 });
 
 export default router;

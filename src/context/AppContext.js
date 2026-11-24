@@ -40,17 +40,37 @@ export function AppProvider({ children }) {
     rescheduleAll(upcoming, settingsRef.current).catch((e) => console.warn('Error reprogramando notificaciones:', e));
   }, []);
 
+  // Sincroniza con el servidor (sube y baja). Si bajó algo nuevo, vuelve a leer SQLite y refresca las pantallas.
+  // Nunca lanza error: sin conexión, la app sigue funcionando con SQLite.
+  const doSync = useCallback(async (opts) => {
+    try {
+      const r = await syncNow(opts);
+      if (r?.changed && sessionRef.current) {
+        setProfile(await repo.getProfile());
+        await repo.ensureDoses();
+        await refresh();
+      }
+      return r;
+    } catch (e) {
+      console.warn('No se pudo sincronizar con el servidor; se usa la copia local (SQLite):', e.message);
+      return null;
+    }
+  }, [refresh]);
+
   // Carga los datos del usuario que acaba de entrar (o que ya tenía sesión).
   const enterSession = useCallback(async (user) => {
     sessionRef.current = user;
     setSession(user);
+    // Primero se baja lo del servidor (fuente principal) con un tiempo máximo corto: así, en un teléfono nuevo
+    // o reinstalado aparecen los datos de la cuenta antes de generar las tomas. Sin conexión se sigue con SQLite.
+    await doSync({ timeout: 8000 });
     setProfile(await repo.getProfile());
     await repo.ensureDoses();
     await repo.autoSkipExpired();
     await repo.purgeFinishedMeds(); // quita los tratamientos cuya duración ya terminó
     await refresh();
-    syncNow().catch((e) => console.warn('No se pudo sincronizar con el servidor; los datos siguen guardados en el teléfono:', e.message));
-  }, [refresh]);
+    doSync(); // sube lo generado (tomas nuevas, etc.) sin hacer esperar a la pantalla
+  }, [refresh, doSync]);
 
   // Carga inicial: abre la BD, recupera la sesión (si existe) y pide permisos.
   useEffect(() => {
@@ -96,17 +116,19 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     const timer = setInterval(tick, 5000);
+    const syncTimer = setInterval(() => { if (sessionRef.current) doSync(); }, 120000); // trae cambios hechos desde otro dispositivo
     const sub = AppState.addEventListener('change', (s) => {
       if (s === 'active') {
         tick();
-        if (sessionRef.current) syncNow().catch((e) => console.warn('Error sincronizando al volver a la app:', e.message));
+        if (sessionRef.current) doSync();
       }
     });
     return () => {
       clearInterval(timer);
+      clearInterval(syncTimer);
       sub.remove();
     };
-  }, [tick]);
+  }, [tick, doSync]);
 
   // ---- Sesión: registrarse, entrar (correo o Google) y cerrar sesión ----
   const signUp = useCallback(async (data) => enterSession(await auth.register(data)), [enterSession]);
@@ -131,8 +153,8 @@ export function AppProvider({ children }) {
   const saveProfile = useCallback(async (p) => {
     await repo.saveProfile(p);
     setProfile(await repo.getProfile());
-    syncNow().catch((e) => console.warn('No se pudo sincronizar el perfil:', e.message));
-  }, []);
+    doSync();
+  }, [doSync]);
 
   // ---- Ajustes de sonido y vibración: se guardan, se crea el canal y se reprograman los avisos ----
   const updateSettings = useCallback(async (patch) => {
@@ -142,13 +164,13 @@ export function AppProvider({ children }) {
     await repo.saveSettings(next);
     await ensureChannel(next);
     await refresh();
-  }, [refresh]);
+  }, [refresh, doSync]);
 
   // ---- Acciones sobre tomas (cada una actúa solo sobre SU toma) ----
   const act = (fn) => async (id) => {
     const res = await fn(id);
     await refresh();
-    syncNow().catch((e) => console.warn('No se pudo sincronizar la toma:', e.message));
+    doSync();
     return res;
   };
   const takeDose = useCallback(act(repo.takeDose), [refresh]);
@@ -162,16 +184,16 @@ export function AppProvider({ children }) {
     if (img) {
       await repo.updateMedicationImage(med.id, { imageUrl: img.url, imageSource: img.source });
       await refresh();
-      syncNow().catch((e) => console.warn('No se pudo sincronizar la imagen del medicamento:', e.message));
+      doSync();
     }
     return img;
-  }, [refresh]);
+  }, [refresh, doSync]);
 
   // ---- Acciones sobre medicamentos ----
   const saveMed = useCallback(async (data) => {
     const id = await repo.saveMedication(data);
     await refresh();
-    syncNow().catch((e) => console.warn('No se pudo sincronizar el medicamento:', e.message));
+    doSync();
     // Si no tiene imagen, se busca en segundo plano (no hace esperar al usuario).
     if (!data.imageUrl) {
       findReferenceImage({ name: data.name, activeIngredient: data.activeIngredient })
@@ -179,33 +201,33 @@ export function AppProvider({ children }) {
           if (img) {
             await repo.updateMedicationImage(id, { imageUrl: img.url, imageSource: img.source });
             await refresh();
-            syncNow().catch((e) => console.warn('No se pudo sincronizar la imagen del medicamento:', e.message));
+            doSync();
           }
         })
         .catch(() => {});
     }
     return id;
-  }, [refresh]);
+  }, [refresh, doSync]);
 
   const saveMany = useCallback(async (arr) => {
     for (const m of arr) await repo.saveMedication(m);
     await refresh();
-    syncNow().catch((e) => console.warn('No se pudieron sincronizar los medicamentos:', e.message));
-  }, [refresh]);
+    doSync();
+  }, [refresh, doSync]);
 
   const deleteMed = useCallback(async (id) => {
     await repo.deleteMedication(id);
     await refresh();
-    syncNow().catch((e) => console.warn('No se pudo sincronizar la eliminación:', e.message));
-  }, [refresh]);
+    doSync();
+  }, [refresh, doSync]);
 
   const toggleActive = useCallback(async (id) => {
     const med = meds.find((m) => m.id === id);
     if (!med) return;
     await repo.setMedicationActive(id, !med.active);
     await refresh();
-    syncNow().catch((e) => console.warn('No se pudo sincronizar el cambio de estado:', e.message));
-  }, [meds, refresh]);
+    doSync();
+  }, [meds, refresh, doSync]);
 
   const value = {
     meds, todayDoses, ready, session, profile, settings, saveProfile, updateSettings,

@@ -2,7 +2,7 @@
 // (El acceso con Google se retiró de esta pantalla; el código de Google sigue en src/services/googleAuth.js por si se reactiva.)
 // Es la única pantalla accesible sin sesión (ver app/_layout.js): al iniciar sesión, el layout
 // lleva solo a las pestañas.
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -11,6 +11,7 @@ import { Button, Field } from '../src/components/UI';
 import { colors, font, radius } from '../src/theme';
 import { useApp } from '../src/context/AppContext';
 import { validateEmail, validatePassword } from '../src/services/auth';
+import { wakeServer } from '../src/services/api';
 
 // Contraseña: al registrarse se valida la longitud; al iniciar sesión solo que no esté vacía.
 function checkPassword(isRegister, password) {
@@ -30,6 +31,8 @@ export default function LoginScreen() {
   const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Despierta el servidor mientras el usuario escribe sus datos: así el inicio de sesión no espera el arranque.
+  useEffect(() => { wakeServer(); }, []);
   const isRegister = mode === 'register';
   const idleTitle = isRegister ? 'Crear cuenta' : 'Iniciar sesión';
   const buttonTitle = busy ? 'Un momento...' : idleTitle;

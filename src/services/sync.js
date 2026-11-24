@@ -18,10 +18,12 @@ const FULL_PUSH_EVERY_MS = 24 * 3600 * 1000; // red de seguridad: una subida com
 
 // Sube los cambios locales (solo lo que cambió desde la última subida; sin cambios no hace ninguna llamada).
 // Devuelve true si realmente envió algo.
-async function pushChanges({ token, timeout }) {
+// allowFull=false (cierre de sesión): nunca hace la subida completa diaria, que puede ser enorme y hacer esperar
+// al usuario varios segundos; esa red de seguridad se hace en la siguiente sincronización normal.
+async function pushChanges({ token, timeout, allowFull = true }) {
   const startedAt = new Date().toISOString();
   const lastFull = Number(Date.parse((await repo.getMeta('last_full_push_at')) || '')) || 0;
-  const full = Date.now() - lastFull > FULL_PUSH_EVERY_MS;
+  const full = allowFull && Date.now() - lastFull > FULL_PUSH_EVERY_MS;
   const since = full ? null : await repo.getMeta('last_push_at');
   const snapshot = await repo.getSyncSnapshot(since);
   const empty = !snapshot.profile && !snapshot.medications.length && !snapshot.doseLogs.length && !snapshot.doseEvents.length;
@@ -52,7 +54,7 @@ async function cycle({ timeout, pullOnly = false, pushOnly = false }) {
   let pushed = false;
   if (!pullOnly) {
     try {
-      pushed = await pushChanges({ token, timeout });
+      pushed = await pushChanges({ token, timeout, allowFull: !pushOnly });
     } catch (e) {
       if (OFFLINE.test(e.message || '') || pushOnly) throw e; // sin conexión: tampoco se puede bajar
       pushError = e;                                         // error del servidor: igual se intenta bajar

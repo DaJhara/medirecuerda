@@ -791,36 +791,54 @@ async function applyMedication(db, uid, m, logs, stamp) {
   return true;
 }
 
+// Datos de las tomas locales leídos UNA sola vez (en vez de consultar la base por cada fila que llega).
+// Con miles de tomas, esto evita miles de consultas y acelera mucho el primer inicio de sesión.
+async function loadDoseContext(db, uid) {
+  const meds = await db.getAllAsync('SELECT id FROM medications WHERE user_id = ?', [uid]);
+  const logs = await db.getAllAsync(
+    `SELECT d.id, d.medication_id, d.scheduled_at, d.updated_at FROM dose_logs d
+     JOIN medications m ON m.id = d.medication_id WHERE m.user_id = ?`, [uid]);
+  return {
+    ownedMeds: new Set(meds.map((m) => m.id)),
+    logUpdated: new Map(logs.map((l) => [l.id, l.updated_at])),          // id de toma -> updated_at
+    slots: new Map(logs.map((l) => [`${l.medication_id}|${l.scheduled_at}`, { id: l.id, updated_at: l.updated_at }])),
+  };
+}
+
 // Aplica una toma del servidor. Devuelve true si cambió algo en SQLite.
-async function applyDoseLog(db, uid, d, stamp) {
-  const owned = await db.getFirstAsync('SELECT 1 AS x FROM medications WHERE id = ? AND user_id = ?', [d.medication_id, uid]);
-  if (!owned) return false;
-  const local = await db.getFirstAsync('SELECT updated_at FROM dose_logs WHERE id = ?', [d.id]);
+async function applyDoseLog(db, ctx, d, stamp) {
+  if (!ctx.ownedMeds.has(d.medication_id)) return false;
+  const localUpdated = ctx.logUpdated.get(d.id);
   const vals = [d.due_at, d.status, d.dose_taken || null, d.action_at || null, flag(d.on_time), Number(d.snooze_count || 0),
     d.postponed_to || null, d.auto_skipped ? 1 : 0, d.updated_at, stamp];
-  if (local) {
-    if (!newer(d.updated_at, local.updated_at)) return false;
+  if (localUpdated !== undefined) {
+    if (!newer(d.updated_at, localUpdated)) return false;
     await db.runAsync(
       `UPDATE dose_logs SET due_at=?, status=?, dose_taken=?, action_at=?, on_time=?, snooze_count=?, postponed_to=?,
          auto_skipped=?, updated_at=?, synced_at=? WHERE id=?`, [...vals, d.id]);
+    ctx.logUpdated.set(d.id, d.updated_at);
     return true;
   }
   // Otra toma local del mismo medicamento y hora (generada sin conexión con otro id): gana la más nueva.
-  const clash = await db.getFirstAsync('SELECT id, updated_at FROM dose_logs WHERE medication_id = ? AND scheduled_at = ?', [d.medication_id, d.scheduled_at]);
+  const slotKey = `${d.medication_id}|${d.scheduled_at}`;
+  const clash = ctx.slots.get(slotKey);
   if (clash) {
     if (newer(clash.updated_at, d.updated_at)) return false;
     await db.runAsync('DELETE FROM dose_logs WHERE id = ?', [clash.id]);
+    ctx.logUpdated.delete(clash.id);
   }
   await db.runAsync(
     `INSERT INTO dose_logs (due_at, status, dose_taken, action_at, on_time, snooze_count, postponed_to, auto_skipped,
        updated_at, synced_at, id, medication_id, scheduled_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [...vals, d.id, d.medication_id, d.scheduled_at, d.created_at || stamp]);
+  ctx.logUpdated.set(d.id, d.updated_at);
+  ctx.slots.set(slotKey, { id: d.id, updated_at: d.updated_at });
   return true;
 }
 
 // Bitácora de eventos (inmutable: solo se agregan los que faltan). Devuelve cuántas filas se insertaron.
-async function applyDoseEvent(db, e, stamp) {
-  if (!(await db.getFirstAsync('SELECT 1 AS x FROM dose_logs WHERE id = ?', [e.dose_log_id]))) return 0;
+async function applyDoseEvent(db, ctx, e, stamp) {
+  if (!ctx.logUpdated.has(e.dose_log_id)) return 0;
   const r = await db.runAsync(
     `INSERT OR IGNORE INTO dose_events (id, dose_log_id, medication_id, event_type, event_at, scheduled_at,
        postponed_from, postponed_to, created_at, synced_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
@@ -848,8 +866,9 @@ async function applyServerSnapshotImpl(data) {
   await db.withTransactionAsync(async () => {
     out.profile = await applyProfile(db, uid, data.profile, stamp);
     out.medications = await countApplied(data.medications || [], (m) => applyMedication(db, uid, m, logs, stamp));
-    out.doseLogs = await countApplied(logs, (d) => applyDoseLog(db, uid, d, stamp));
-    for (const e of data.doseEvents || []) out.doseEvents += await applyDoseEvent(db, e, stamp); // eslint-disable-line no-await-in-loop
+    const ctx = await loadDoseContext(db, uid); // se lee después de los medicamentos (pueden cambiar de dueño)
+    out.doseLogs = await countApplied(logs, (d) => applyDoseLog(db, ctx, d, stamp));
+    for (const e of data.doseEvents || []) out.doseEvents += await applyDoseEvent(db, ctx, e, stamp); // eslint-disable-line no-await-in-loop
     if (data.serverTime) await db.runAsync("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('last_pull_at', ?)", [data.serverTime]);
   });
   return out;

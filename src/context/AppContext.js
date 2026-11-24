@@ -124,8 +124,12 @@ export function AppProvider({ children }) {
   useEffect(() => {
     const timer = setInterval(tick, 5000);
     const syncTimer = setInterval(() => { if (sessionRef.current) doSync(); }, 120000); // trae cambios hechos desde otro dispositivo
+    // Render gratis duerme el servidor tras ~15 min sin uso y despertarlo tarda segundos: se le avisa cada 8 min
+    // (y al volver a la app) para que iniciar y cerrar sesión no esperen a que arranque.
+    const keepAlive = setInterval(wakeServer, 8 * 60 * 1000);
     const sub = AppState.addEventListener('change', (s) => {
       if (s === 'active') {
+        wakeServer();
         tick();
         if (sessionRef.current) doSync();
       }
@@ -133,6 +137,7 @@ export function AppProvider({ children }) {
     return () => {
       clearInterval(timer);
       clearInterval(syncTimer);
+      clearInterval(keepAlive);
       sub.remove();
     };
   }, [tick, doSync]);
@@ -147,6 +152,7 @@ export function AppProvider({ children }) {
   }, [enterSession]);
 
   const signOut = useCallback(async () => {
+    wakeServer(); // por si el servidor está dormido: la subida final no debe esperar a que arranque
     // Antes de borrar la copia local se suben los últimos cambios. Si no hay conexión, se avisa
     // porque lo que no alcanzó a subirse se perdería.
     if (hasBackend() && (await repo.getRemoteAuthToken())) {
@@ -159,9 +165,12 @@ export function AppProvider({ children }) {
         if (!go) return false;
       }
     }
-    await auth.logout();
     sessionRef.current = null;
-    await rescheduleAll([], settingsRef.current).catch(() => {}); // cancela los recordatorios de este usuario
+    // Se borra la copia local y se cancelan los recordatorios de este usuario al mismo tiempo.
+    await Promise.all([
+      auth.logout(),
+      rescheduleAll([], settingsRef.current).catch(() => {}),
+    ]);
     setMeds([]);
     setTodayDoses([]);
     setProfile(EMPTY_PROFILE);

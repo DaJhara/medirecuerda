@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "API de MediRecuerda para Railway: autenticación, IA (OpenRouter) y búsqueda de imágenes",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch --env-file=.env src/server.js",
@@ -19,6 +21,7 @@
     "google-auth-library": "^9.15.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "swagger-ui-express": "^5.0.1"
   }
 }

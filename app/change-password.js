@@ -1,7 +1,7 @@
 // Ruta "/change-password": cambiar la contraseña con la sesión iniciada (se abre desde el menú lateral).
 // Pide la contraseña actual y la nueva (2 veces). Las cuentas de Google no tienen contraseña aquí.
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { Text, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Header, Button, Field, Card } from '../src/components/UI';
 import { colors, font } from '../src/theme';
@@ -19,9 +19,17 @@ export default function ChangePasswordScreen() {
   const [busy, setBusy] = useState(false);
   const isGoogle = profile.provider === 'google';
 
+  // Devuelve el primer problema del formulario, o null si todo está bien.
+  const validateForm = () => {
+    if (!current) return 'Escribe tu contraseña actual.';
+    const weak = validatePassword(pass);
+    if (weak) return weak;
+    return pass === pass2 ? null : 'Las contraseñas nuevas no coinciden.';
+  };
+
   const submit = async () => {
     setError('');
-    const problem = !current ? 'Escribe tu contraseña actual.' : validatePassword(pass) || (pass !== pass2 ? 'Las contraseñas nuevas no coinciden.' : null);
+    const problem = validateForm();
     if (problem) return setError(problem);
     setBusy(true);
     try {

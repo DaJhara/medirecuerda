@@ -69,6 +69,22 @@ export default function TodayScreen() {
     if (!img) Alert.alert('Sin imagen', 'No se encontró una imagen de referencia. Intenta de nuevo más tarde.');
   };
 
+  // Imagen de referencia de un medicamento: la imagen, el indicador de carga o el botón para buscarla.
+  const renderReferenceImage = (g) => {
+    if (g.imageUrl) {
+      return (
+        <View>
+          <Image source={{ uri: g.imageUrl }} style={s.image} resizeMode="contain" />
+          <Text style={s.caption}>
+            Imagen de referencia{g.imageSource ? ` · ${g.imageSource}` : ''}. Puede no coincidir con la presentación que te entreguen.
+          </Text>
+        </View>
+      );
+    }
+    if (loadingImg[g.medId]) return <ActivityIndicator color={colors.primary} />;
+    return <Button title="Buscar imagen de referencia" variant="ghost" small onPress={() => onFindImage(g)} />;
+  };
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <Header title="Hoy" subtitle={dateLabel} />
@@ -171,18 +187,7 @@ export default function TodayScreen() {
                   {g.activeIngredient ? <Text style={s.infoMuted}>Principio activo: {g.activeIngredient}</Text> : null}
 
                   <Text style={s.sectionTitle}>Imagen de referencia</Text>
-                  {g.imageUrl ? (
-                    <View>
-                      <Image source={{ uri: g.imageUrl }} style={s.image} resizeMode="contain" />
-                      <Text style={s.caption}>
-                        Imagen de referencia{g.imageSource ? ` · ${g.imageSource}` : ''}. Puede no coincidir con la presentación que te entreguen.
-                      </Text>
-                    </View>
-                  ) : loadingImg[g.medId] ? (
-                    <ActivityIndicator color={colors.primary} />
-                  ) : (
-                    <Button title="Buscar imagen de referencia" variant="ghost" small onPress={() => onFindImage(g)} />
-                  )}
+                  {renderReferenceImage(g)}
                 </View>
               )}
             </Card>

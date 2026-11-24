@@ -47,7 +47,8 @@ export default function ScanScreen() {
       } else {
         const defaultTime = `${String((new Date().getHours() + 1) % 24).padStart(2, '0')}:00`;
         setItems(
-          meds.map((m) => ({
+          meds.map((m, n) => ({
+            id: `${Date.now()}-${n}`, // clave estable para la lista
             include: true,
             name: m.name,
             activeIngredient: m.activeIngredient, // identificado por la IA
@@ -78,15 +79,15 @@ export default function ScanScreen() {
   const update = (i, patch) => setItems((arr) => arr.map((it, idx) => (idx === i ? { ...it, ...patch } : it)));
 
   // Valida y convierte los elementos seleccionados en medicamentos.
-  const saveSelected = () => {
+  const saveSelected = async () => {
     const chosen = items.filter((it) => it.include);
     if (chosen.length === 0) return Alert.alert('Nada seleccionado', 'Marca al menos un medicamento.');
     const result = [];
     for (const it of chosen) {
       const t = parseTime(it.time);
-      const interval = parseInt(it.intervalHours, 10);
-      const days = it.durationDays.trim() === '' ? null : parseInt(it.durationDays, 10);
-      if (!it.name.trim() || !t || !(interval >= 1 && interval <= 24) || (days !== null && !(days > 0))) {
+      const interval = Number.parseInt(it.intervalHours, 10);
+      const days = it.durationDays.trim() === '' ? null : Number.parseInt(it.durationDays, 10);
+      if (!it.name.trim() || !t || Number.isNaN(interval) || interval < 1 || interval > 24 || (days !== null && (Number.isNaN(days) || days <= 0))) {
         return Alert.alert('Revisa los datos', `Hay un dato no válido en "${it.name || 'medicamento'}". Corrígelo e intenta de nuevo.`);
       }
       result.push({
@@ -102,7 +103,7 @@ export default function ScanScreen() {
         imageSource: it.imageSource || null,
       });
     }
-    onSaveMany(result);
+    await onSaveMany(result);
   };
 
   return (
@@ -138,7 +139,7 @@ export default function ScanScreen() {
           <View style={{ marginTop: 20 }}>
             <Text style={s.section}>Revisa y corrige</Text>
             {items.map((it, i) => (
-              <Card key={i} style={!it.include ? { opacity: 0.5 } : undefined}>
+              <Card key={it.id} style={!it.include ? { opacity: 0.5 } : undefined}>
                 <TouchableOpacity onPress={() => update(i, { include: !it.include })} style={s.check}>
                   <View style={[s.box, it.include && { backgroundColor: colors.primary }]}>
                     {it.include && <Text style={{ color: '#fff', fontWeight: '800' }}>✓</Text>}

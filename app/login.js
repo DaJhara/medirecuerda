@@ -3,7 +3,7 @@
 // Es la única pantalla accesible sin sesión (ver app/_layout.js): al iniciar sesión, el layout
 // lleva solo a las pestañas.
 import React, { useState } from 'react';
-import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, ScrollView, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,6 +11,12 @@ import { Button, Field } from '../src/components/UI';
 import { colors, font, radius } from '../src/theme';
 import { useApp } from '../src/context/AppContext';
 import { validateEmail, validatePassword } from '../src/services/auth';
+
+// Contraseña: al registrarse se valida la longitud; al iniciar sesión solo que no esté vacía.
+function checkPassword(isRegister, password) {
+  if (isRegister) return validatePassword(password);
+  return password ? null : 'Escribe tu contraseña.';
+}
 
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
@@ -25,6 +31,8 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const isRegister = mode === 'register';
+  const idleTitle = isRegister ? 'Crear cuenta' : 'Iniciar sesión';
+  const buttonTitle = busy ? 'Un momento...' : idleTitle;
 
   const switchMode = (m) => {
     setMode(m);
@@ -35,7 +43,7 @@ export default function LoginScreen() {
   const submit = async () => {
     setError('');
     if (isRegister && !name.trim()) return setError('Escribe tu nombre completo.');
-    const problem = validateEmail(email) || (isRegister ? validatePassword(password) : password ? null : 'Escribe tu contraseña.');
+    const problem = validateEmail(email) || checkPassword(isRegister, password);
     if (problem) return setError(problem);
     setBusy(true);
     try {
@@ -124,7 +132,7 @@ export default function LoginScreen() {
           </View>
         ) : null}
 
-        <Button title={busy ? 'Un momento...' : isRegister ? 'Crear cuenta' : 'Iniciar sesión'} onPress={submit} disabled={busy} />
+        <Button title={buttonTitle} onPress={submit} disabled={busy} />
 
         <Text style={s.legal}>
           Tus datos de salud se guardan en este teléfono. Al continuar aceptas que MediRecuerda es una ayuda de recordatorio y no reemplaza la indicación de tu médico.

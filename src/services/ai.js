@@ -90,17 +90,19 @@ export async function analyzePrescription({ text, imageBase64, mime = 'image/jpe
 
 // Extrae y normaliza el JSON de la respuesta (los modelos a veces añaden texto extra).
 export function parseMedications(raw) {
-  const match = /\{[\s\S]*\}/.exec(raw);
-  if (!match) throw new Error('No pude interpretar la respuesta de la IA.');
+  // Del primer "{" al último "}" (sin expresiones regulares: evita el costo de backtracking).
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start === -1 || end <= start) throw new Error('No pude interpretar la respuesta de la IA.');
   let json;
   try {
-    json = JSON.parse(match[0]);
+    json = JSON.parse(raw.slice(start, end + 1));
   } catch {
     throw new Error('La respuesta de la IA no tiene el formato esperado.');
   }
   const list = Array.isArray(json.medications) ? json.medications : [];
   return list
-    .filter((m) => m && m.name)
+    .filter((m) => m?.name)
     .map((m) => {
       const interval = Math.round(Number(m.intervalHours));
       const days = Math.round(Number(m.durationDays));

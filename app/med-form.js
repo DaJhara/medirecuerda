@@ -21,7 +21,7 @@ export default function MedFormScreen() {
   const editing = !!med;
   const [name, setName] = useState(med?.name || '');
   const [dose, setDose] = useState(med?.dose || '');
-  const [interval, setIntervalH] = useState(med?.intervalHours || 8);
+  const [intervalHours, setIntervalHours] = useState(med?.intervalHours || 8);
   const [time, setTime] = useState(
     med ? fmtTime24(med.startAt) : '08:00'
   );
@@ -41,14 +41,14 @@ export default function MedFormScreen() {
     if (!dose.trim()) return Alert.alert('Falta la dosis', 'Indica la dosis por toma (ej. 1 tableta).');
     const t = parseTime(time);
     if (!t) return Alert.alert('Hora no válida', 'Usa el formato HH:MM, por ejemplo 08:30 o 21:00.');
-    const d = days.trim() === '' ? null : parseInt(days, 10);
-    if (d !== null && (!(d > 0) || d > 365)) return Alert.alert('Duración no válida', 'Indica un número de días entre 1 y 365, o déjalo vacío.');
+    const d = days.trim() === '' ? null : Number.parseInt(days, 10);
+    if (d !== null && (Number.isNaN(d) || d <= 0 || d > 365)) return Alert.alert('Duración no válida', 'Indica un número de días entre 1 y 365, o déjalo vacío.');
 
     onSave({
       id: med?.id,
       name: name.trim(),
       dose: dose.trim(),
-      intervalHours: interval,
+      intervalHours,
       startAt: scheduleTouched ? atDayOffset(t.h, t.m, dayOffset) : med.startAt,
       durationDays: d,
       notes: notes.trim(),
@@ -73,7 +73,7 @@ export default function MedFormScreen() {
           <Text style={labelStyle}>Frecuencia: cada cuántas horas</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 }}>
             {INTERVALS.map((h) => (
-              <Chip key={h} label={`${h} h`} selected={interval === h} onPress={() => touch(setIntervalH)(h)} />
+              <Chip key={h} label={`${h} h`} selected={intervalHours === h} onPress={() => touch(setIntervalHours)(h)} />
             ))}
           </View>
 

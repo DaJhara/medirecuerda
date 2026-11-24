@@ -38,7 +38,7 @@ async function searchSerper(query) {
   });
   if (!res.ok) return null;
   const data = await res.json();
-  const list = (data.images || []).filter((i) => /^https:\/\//.test(i.thumbnailUrl || i.imageUrl || ''));
+  const list = (data.images || []).filter((i) => (i.thumbnailUrl || i.imageUrl || '').startsWith('https://'));
   if (list.length === 0) return null;
   // Primero los de droguerías colombianas; si no hay, el primer resultado (búsqueda ya filtrada por país).
   const local = list.find((i) => CO_DOMAINS.some((d) => (i.domain || i.link || '').includes(d)));

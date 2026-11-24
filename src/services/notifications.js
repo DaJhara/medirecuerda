@@ -121,10 +121,11 @@ export async function rescheduleAll(upcoming, settings) {
     .slice(0, MAX_SCHEDULED);
 
   for (const d of list) {
+    const notesSuffix = d.notes ? ` · ${d.notes}` : '';
     await Notifications.scheduleNotificationAsync({
       content: {
         title: d.snoozeCount > 0 ? 'Recordatorio aplazado' : 'Hora de tu medicamento',
-        body: `${d.name} · ${d.dose}${d.notes ? ` · ${d.notes}` : ''} (${fmtTime(d.dueAt)})`,
+        body: `${d.name} · ${d.dose}${notesSuffix} (${fmtTime(d.dueAt)})`,
         sound: settings.sound ? 'default' : false,
       },
       trigger: {

@@ -19,7 +19,6 @@ const LOCAL_ONLY = {
   columns: ['synced_at'],                          // marca de sincronización (solo en el teléfono)
   indexes: ['idx_logs_unsynced'],
 };
-const SERVER_ONLY = { tables: [], columns: [], indexes: [] }; // vistas y enums no se comparan
 
 // ---- 1) schema.js == sqlite/schema.sql ----
 const js = read('src/db/schema.js');
@@ -38,94 +37,190 @@ if (read('database/sqlite/schema.sql') !== expectedFile) {
 }
 
 // ---- 2) Paridad SQLite <-> PostgreSQL ----
-const strip = (sql) => sql.replace(/--[^\n]*/g, '');
-const norm = (s) => s.replace(/\s+/g, ' ').replace(/\s*([(),])\s*/g, '$1').trim().toLowerCase();
+const strip = (sql) => sql.replaceAll(/--[^\n]*/g, '');
+
+// Normaliza espacios y quita los que rodean a "(", ")" y "," (sin expresiones regulares costosas).
+function norm(text) {
+  let t = text.split(/\s+/).filter(Boolean).join(' ');
+  for (const p of ['(', ')', ',']) t = t.replaceAll(` ${p}`, p).replaceAll(`${p} `, p);
+  return t.trim().toLowerCase();
+}
+
+// Normaliza un CHECK para que "x BETWEEN 1 AND 2" y "x IS NULL OR x BETWEEN 1 AND 2" se consideren iguales:
+// elimina los trozos "<palabra> is null or".
+function simplify(check) {
+  const words = check.split(' ');
+  const out = [];
+  for (let i = 0; i < words.length; i++) {
+    if (words[i + 1] === 'is' && words[i + 2] === 'null' && words[i + 3] === 'or') i += 3;
+    else out.push(words[i]);
+  }
+  return out.join(' ');
+}
+
+// Devuelve la posición del ")" que cierra el "(" de la posición "open".
+function closingParen(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')' && --depth === 0) return i;
+  }
+  return text.length;
+}
 
 // Parte el cuerpo de un CREATE TABLE en definiciones separadas por comas de nivel 0.
 function splitTop(body) {
-  const out = []; let depth = 0, cur = '';
+  const out = [];
+  let depth = 0;
+  let cur = '';
   for (const ch of body) {
     if (ch === '(') depth++;
     if (ch === ')') depth--;
-    if (ch === ',' && depth === 0) { out.push(cur); cur = ''; } else cur += ch;
+    if (ch === ',' && depth === 0) {
+      out.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
   }
-  if (cur.trim()) out.push(cur);
-  return out.map((s) => s.trim()).filter(Boolean);
+  out.push(cur);
+  return out.map((x) => x.trim()).filter(Boolean);
 }
 
-function parse(sql) {
-  const s = strip(sql);
+// Contenido de cada CHECK ( ... ) que aparece en una definición de columna.
+function checksOf(def) {
+  const found = [];
+  const lower = def.toLowerCase();
+  let from = 0;
+  for (let at = lower.indexOf('check', from); at !== -1; at = lower.indexOf('check', from)) {
+    const open = lower.indexOf('(', at);
+    if (open === -1 || lower.slice(at + 5, open).trim() !== '') { from = at + 5; continue; }
+    const close = closingParen(def, open);
+    found.push(norm(def.slice(open + 1, close)));
+    from = close;
+  }
+  return found;
+}
+
+// Una columna: tipo, NOT NULL y CHECKs. Una restricción de tabla (UNIQUE, CHECK...) se devuelve aparte.
+function parseDefinition(def) {
+  const words = def.split(/\s+/);
+  const first = words[0].toLowerCase();
+  if (['unique', 'check', 'primary', 'constraint'].includes(first)) return { constraint: norm(def) };
+  const type = (words[1] || '').toLowerCase();
+  return { name: first, checks: checksOf(def), notNull: /not null/i.test(def), type: type.split('(')[0] };
+}
+
+function parseTables(s) {
   const tables = {};
   const re = /CREATE TABLE (?:IF NOT EXISTS )?(\w+)\s*\(/gi;
-  let m;
-  while ((m = re.exec(s))) {
-    let i = re.lastIndex, depth = 1;
-    while (depth > 0) { const c = s[i++]; if (c === '(') depth++; if (c === ')') depth--; }
-    const cols = {}, table_checks = [];
-    for (const def of splitTop(s.slice(re.lastIndex, i - 1))) {
-      const first = def.split(/\s+/)[0].toLowerCase();
-      if (['unique', 'check', 'primary', 'constraint'].includes(first)) { table_checks.push(norm(def)); continue; }
-      const checks = [...def.matchAll(/CHECK\s*\((.*)\)/gi)].map((x) => norm(x[1]));
-      cols[first] = { checks, notNull: /not null/i.test(def), type: (def.split(/\s+/)[1] || '').toLowerCase().replace(/\(.*/, '') };
+  for (let m = re.exec(s); m; m = re.exec(s)) {
+    const close = closingParen(s, re.lastIndex - 1);
+    const cols = {};
+    const tableChecks = [];
+    for (const def of splitTop(s.slice(re.lastIndex, close))) {
+      const d = parseDefinition(def);
+      if (d.constraint) tableChecks.push(d.constraint);
+      else cols[d.name] = { checks: d.checks, notNull: d.notNull, type: d.type };
     }
-    tables[m[1].toLowerCase()] = { cols, table_checks };
+    tables[m[1].toLowerCase()] = { cols, table_checks: tableChecks };
   }
+  return tables;
+}
+
+function parseIndexes(s) {
   const indexes = {};
   for (const x of s.matchAll(/CREATE (UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+)\s+ON\s+(\w+)\s*\(([^)]*)\)/gi)) {
     indexes[x[2].toLowerCase()] = { unique: !!x[1], table: x[3].toLowerCase(), cols: norm(x[4]) };
   }
+  return indexes;
+}
+
+function parseEnums(s) {
   const enums = {};
   for (const x of s.matchAll(/CREATE TYPE (\w+) AS ENUM\s*\(([^)]*)\)/gi)) {
-    enums[x[1].toLowerCase()] = x[2].split(',').map((v) => v.trim().replace(/'/g, '')).sort().join('|');
+    enums[x[1].toLowerCase()] = x[2].split(',').map((v) => v.trim().replaceAll("'", '')).sort().join('|');
   }
-  return { tables, indexes, enums };
+  return enums;
+}
+
+function parse(sql) {
+  const s = strip(sql);
+  return { tables: parseTables(s), indexes: parseIndexes(s), enums: parseEnums(s) };
+}
+
+// Valores de un CHECK (col IN ('a','b')) de SQLite, como texto ordenado "a|b".
+function inListValues(checks) {
+  for (const c of checks) {
+    const at = c.indexOf('in(');
+    if (at !== -1 && c.endsWith(')')) return c.slice(at + 3, -1).split(',').map((v) => v.replaceAll("'", '')).sort().join('|');
+  }
+  return '';
 }
 
 const sq = parse(sqliteSql);
 const pg = parse(read('database/postgres/schema.sql'));
+const joined = (list) => list.map(simplify).sort().join('|');
 
-// Normaliza un CHECK para que "x BETWEEN 1 AND 2" y "x IS NULL OR x BETWEEN 1 AND 2" se consideren iguales.
-const simplify = (c) => c.replace(/\w+ is null or /g, '');
+// Compara una columna que existe en ambos motores y devuelve los errores encontrados.
+function compareColumn(t, c, a, b) {
+  const errs = [];
+  let ca = joined(a.checks);
+  let cb = joined(b.checks);
+  const enumValues = pg.enums[b.type];
+  if (enumValues) {
+    // Enum de PostgreSQL == CHECK (col IN (...)) de SQLite: se comparan los valores.
+    const vals = inListValues(a.checks);
+    if (vals !== enumValues) errs.push(`${t}.${c}: valores del enum distintos → SQLite [${vals}] vs PostgreSQL [${enumValues}].`);
+    ca = '';
+    cb = '';
+  }
+  if (ca !== cb) errs.push(`${t}.${c}: CHECK distinto → SQLite [${ca || 'ninguno'}] vs PostgreSQL [${cb || 'ninguno'}].`);
+  if (a.notNull !== b.notNull) errs.push(`${t}.${c}: NOT NULL distinto (SQLite ${a.notNull}, PostgreSQL ${b.notNull}).`);
+  return errs;
+}
+
+function compareTable(t) {
+  const a = sq.tables[t].cols;
+  const b = pg.tables[t].cols;
+  const errs = [];
+  for (const c of Object.keys(a)) {
+    if (LOCAL_ONLY.columns.includes(c)) continue;
+    if (b[c]) errs.push(...compareColumn(t, c, a[c], b[c]));
+    else errs.push(`${t}.${c}: está en SQLite pero falta en PostgreSQL.`);
+  }
+  for (const c of Object.keys(b)) {
+    if (!a[c]) errs.push(`${t}.${c}: está en PostgreSQL pero falta en SQLite.`);
+  }
+  const ta = joined(sq.tables[t].table_checks);
+  const tb = joined(pg.tables[t].table_checks);
+  if (ta !== tb) errs.push(`${t}: restricciones de tabla distintas → SQLite [${ta}] vs PostgreSQL [${tb}].`);
+  return errs;
+}
+
+function compareIndexes() {
+  const errs = [];
+  for (const [name, idx] of Object.entries(sq.indexes)) {
+    if (LOCAL_ONLY.indexes.includes(name)) continue;
+    const other = pg.indexes[name];
+    if (!other) errs.push(`Índice "${name}": está en SQLite pero falta en PostgreSQL.`);
+    else if (idx.cols !== other.cols || idx.unique !== other.unique) errs.push(`Índice "${name}": columnas o unicidad distintas.`);
+  }
+  for (const name of Object.keys(pg.indexes)) {
+    if (!sq.indexes[name]) errs.push(`Índice "${name}": está en PostgreSQL pero falta en SQLite.`);
+  }
+  return errs;
+}
 
 for (const t of Object.keys(pg.tables)) {
-  if (!sq.tables[t]) { errors.push(`Falta la tabla "${t}" en SQLite.`); continue; }
+  if (!sq.tables[t]) errors.push(`Falta la tabla "${t}" en SQLite.`);
 }
 for (const t of Object.keys(sq.tables)) {
   if (LOCAL_ONLY.tables.includes(t)) continue;
-  if (!pg.tables[t]) { errors.push(`Falta la tabla "${t}" en PostgreSQL.`); continue; }
-  const a = sq.tables[t].cols, b = pg.tables[t].cols;
-  for (const c of Object.keys(a)) {
-    if (LOCAL_ONLY.columns.includes(c)) continue;
-    if (!b[c]) errors.push(`${t}.${c}: está en SQLite pero falta en PostgreSQL.`);
-  }
-  for (const c of Object.keys(b)) {
-    if (!a[c]) errors.push(`${t}.${c}: está en PostgreSQL pero falta en SQLite.`);
-  }
-  for (const c of Object.keys(a)) {
-    if (!b[c]) continue;
-    let ca = a[c].checks.map(simplify).sort().join('|'), cb = b[c].checks.map(simplify).sort().join('|');
-    // Enum de PostgreSQL == CHECK (col IN (...)) de SQLite: se comparan los valores.
-    if (pg.enums[b[c].type]) {
-      const inList = a[c].checks.map((x) => /in\((.*)\)$/.exec(x)).find(Boolean);
-      const vals = inList ? inList[1].split(',').map((v) => v.replace(/'/g, '')).sort().join('|') : '';
-      if (vals !== pg.enums[b[c].type]) errors.push(`${t}.${c}: valores del enum distintos → SQLite [${vals}] vs PostgreSQL [${pg.enums[b[c].type]}].`);
-      ca = cb = '';
-    }
-    if (ca !== cb) errors.push(`${t}.${c}: CHECK distinto → SQLite [${ca || 'ninguno'}] vs PostgreSQL [${cb || 'ninguno'}].`);
-    if (a[c].notNull !== b[c].notNull) errors.push(`${t}.${c}: NOT NULL distinto (SQLite ${a[c].notNull}, PostgreSQL ${b[c].notNull}).`);
-  }
-  const ta = sq.tables[t].table_checks.map(simplify).sort().join('|'), tb = pg.tables[t].table_checks.map(simplify).sort().join('|');
-  if (ta !== tb) errors.push(`${t}: restricciones de tabla distintas → SQLite [${ta}] vs PostgreSQL [${tb}].`);
+  if (pg.tables[t]) errors.push(...compareTable(t));
+  else errors.push(`Falta la tabla "${t}" en PostgreSQL.`);
 }
-for (const i of Object.keys(sq.indexes)) {
-  if (LOCAL_ONLY.indexes.includes(i)) continue;
-  if (!pg.indexes[i]) errors.push(`Índice "${i}": está en SQLite pero falta en PostgreSQL.`);
-  else if (sq.indexes[i].cols !== pg.indexes[i].cols || sq.indexes[i].unique !== pg.indexes[i].unique)
-    errors.push(`Índice "${i}": columnas o unicidad distintas.`);
-}
-for (const i of Object.keys(pg.indexes)) {
-  if (!sq.indexes[i]) errors.push(`Índice "${i}": está en PostgreSQL pero falta en SQLite.`);
-}
+errors.push(...compareIndexes());
 
 // ---- 3) La migración inicial del backend es copia exacta del esquema de PostgreSQL ----
 if (read('backend/migrations/001_init.sql') !== read('database/postgres/schema.sql')) {

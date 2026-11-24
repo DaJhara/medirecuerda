@@ -1,6 +1,6 @@
 // Recuperación de contraseña mediante código enviado al correo por el backend.
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { Text, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Header, Button, Field, Card } from '../src/components/UI';
 import { colors, font } from '../src/theme';
@@ -32,9 +32,17 @@ export default function ForgotPasswordScreen() {
     setBusy(false);
   };
 
+  // Devuelve el primer problema del formulario, o null si todo está bien.
+  const validateForm = () => {
+    if (!/^\d{6}$/.test(code.trim())) return 'Escribe el código de 6 dígitos.';
+    const weak = validatePassword(pass);
+    if (weak) return weak;
+    return pass === pass2 ? null : 'Las contraseñas no coinciden.';
+  };
+
   const submit = async () => {
     setError('');
-    const problem = !/^\d{6}$/.test(code.trim()) ? 'Escribe el código de 6 dígitos.' : validatePassword(pass) || (pass !== pass2 ? 'Las contraseñas no coinciden.' : null);
+    const problem = validateForm();
     if (problem) return setError(problem);
     setBusy(true);
     try {

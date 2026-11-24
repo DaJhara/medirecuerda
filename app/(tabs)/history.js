@@ -20,32 +20,60 @@ const C_TAKEN = colors.primary;
 const C_SKIPPED = colors.primaryMid; // verde claro (en sintonía con la paleta)
 const C_MISSED = '#CFD8DC';
 
+const GRAY = { tagColor: colors.muted, tagBg: '#EEEEEE' };
+const GREEN = { tagColor: colors.primaryDark, tagBg: colors.primaryLight };
+const LATE = { tagColor: colors.leaf, tagBg: colors.leafBg };
+
+// "Aplazada 2 veces: 08:00 → 08:20" (o null si no se aplazó).
+function snoozeLine(d) {
+  if (d.snoozeCount <= 0) return null;
+  const times = d.snoozeCount === 1 ? 'vez' : 'veces';
+  const from = fmtTime(d.scheduledAt);
+  const to = fmtTime(d.postponedTo ?? d.dueAt);
+  return `Aplazada ${d.snoozeCount} ${times}: ${from} → ${to}`;
+}
+
+function describeTaken(d, snooze) {
+  const colorsOf = d.onTime ? GREEN : LATE;
+  return {
+    title: `Tomada a las ${fmtTime(d.actionAt)}`,
+    tag: d.onTime ? 'A tiempo' : 'Con retraso',
+    ...colorsOf,
+    extra: [d.doseTaken ? `Dosis tomada: ${d.doseTaken}` : null, snooze].filter(Boolean),
+  };
+}
+
+function describeSkipped(d, snooze) {
+  const auto = d.autoSkipped ? ' (automática)' : '';
+  return { title: `Omitida a las ${fmtTime(d.actionAt)}${auto}`, tag: 'Omitida', ...GRAY, extra: [snooze].filter(Boolean) };
+}
+
 // Texto, etiqueta y color de una toma según su estado.
 function describe(d, now) {
-  const snooze =
-    d.snoozeCount > 0
-      ? `Aplazada ${d.snoozeCount} ${d.snoozeCount === 1 ? 'vez' : 'veces'}: ${fmtTime(d.scheduledAt)} → ${fmtTime(d.postponedTo ?? d.dueAt)}`
-      : null;
-  if (d.status === 'taken') {
-    return {
-      title: `Tomada a las ${fmtTime(d.actionAt)}`,
-      tag: d.onTime ? 'A tiempo' : 'Con retraso',
-      tagColor: d.onTime ? colors.primaryDark : colors.leaf,
-      tagBg: d.onTime ? colors.primaryLight : colors.leafBg,
-      extra: [d.doseTaken ? `Dosis tomada: ${d.doseTaken}` : null, snooze].filter(Boolean),
-    };
-  }
-  if (d.status === 'skipped') {
-    return {
-      title: `Omitida a las ${fmtTime(d.actionAt)}${d.autoSkipped ? ' (automática)' : ''}`,
-      tag: 'Omitida', tagColor: colors.muted, tagBg: '#EEEEEE',
-      extra: [snooze].filter(Boolean),
-    };
-  }
+  const snooze = snoozeLine(d);
+  if (d.status === 'taken') return describeTaken(d, snooze);
+  if (d.status === 'skipped') return describeSkipped(d, snooze);
   if (d.snoozeCount > 0 && d.dueAt > now) {
-    return { title: `Aplazada hasta las ${fmtTime(d.dueAt)}`, tag: 'Aplazada', tagColor: colors.primaryDark, tagBg: colors.primaryLight, extra: [snooze] };
+    return { title: `Aplazada hasta las ${fmtTime(d.dueAt)}`, tag: 'Aplazada', ...GREEN, extra: [snooze] };
   }
-  return { title: 'Sin respuesta', tag: 'Sin registro', tagColor: colors.muted, tagBg: '#EEEEEE', extra: [snooze].filter(Boolean) };
+  return { title: 'Sin respuesta', tag: 'Sin registro', ...GRAY, extra: [snooze].filter(Boolean) };
+}
+
+// Semanas del calendario del mes (la semana empieza en lunes). Cada celda lleva su propia clave estable.
+function buildWeeks(year, month) {
+  const offset = (new Date(year, month, 1).getDay() + 6) % 7;
+  const total = new Date(year, month + 1, 0).getDate();
+  const mm = String(month + 1).padStart(2, '0');
+  const cells = [];
+  for (let n = 0; n < offset; n++) cells.push({ id: `${year}-${mm}-pre${n}`, day: null });
+  for (let day = 1; day <= total; day++) {
+    const dd = String(day).padStart(2, '0');
+    cells.push({ id: `${year}-${mm}-${dd}`, key: `${year}-${mm}-${dd}`, day });
+  }
+  for (let n = 0; cells.length % 7 !== 0; n++) cells.push({ id: `${year}-${mm}-post${n}`, day: null });
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push({ id: cells[i].id, cells: cells.slice(i, i + 7) });
+  return weeks;
 }
 
 export default function HistoryScreen() {
@@ -98,14 +126,9 @@ export default function HistoryScreen() {
   const weekTotal = week.reduce((a, d) => a + d.total, 0);
   const pct = weekTotal ? Math.round((weekTaken / weekTotal) * 100) : null;
 
-  // Celdas del calendario (la semana empieza en lunes).
+  // Semanas del calendario del mes mostrado.
   const first = new Date(cursor.year, cursor.month, 1);
-  const offset = (first.getDay() + 6) % 7;
-  const total = new Date(cursor.year, cursor.month + 1, 0).getDate();
-  const cells = [...Array(offset).fill(null), ...Array.from({ length: total }, (_, i) => i + 1)];
-  while (cells.length % 7) cells.push(null);
-  const weeks = [];
-  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  const weeks = buildWeeks(cursor.year, cursor.month);
 
   const isCurrentMonth = cursor.year === now0.getFullYear() && cursor.month === now0.getMonth();
   const monthLabel = first.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
@@ -215,7 +238,7 @@ export default function HistoryScreen() {
                           <Badge text={info.tag} color={info.tagColor} bg={info.tagBg} />
                         </View>
                         <Text style={s.doseTitle}>{info.title}</Text>
-                        {info.extra.map((t, i) => <Text key={i} style={s.doseExtra}>{t}</Text>)}
+                        {info.extra.map((t) => <Text key={t} style={s.doseExtra}>{t}</Text>)}
                       </View>
                     );
                   })}
@@ -243,15 +266,15 @@ export default function HistoryScreen() {
             <View style={s.week}>
               {WEEKDAYS.map((w) => <Text key={w} style={s.weekday}>{w}</Text>)}
             </View>
-            {weeks.map((wk, wi) => (
-              <View key={wi} style={s.week}>
-                {wk.map((day, di) => {
-                  if (!day) return <View key={di} style={s.cell} />;
-                  const key = `${cursor.year}-${String(cursor.month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            {weeks.map((wk) => (
+              <View key={wk.id} style={s.week}>
+                {wk.cells.map((cell) => {
+                  if (!cell.day) return <View key={cell.id} style={s.cell} />;
+                  const { key, day } = cell;
                   const isSel = key === selected;
                   const future = key > todayKey; // no hay historial de días futuros
                   return (
-                    <TouchableOpacity key={di} style={s.cell} disabled={future} onPress={() => pickDay(key)} accessibilityLabel={`Día ${day}`}>
+                    <TouchableOpacity key={cell.id} style={s.cell} disabled={future} onPress={() => pickDay(key)} accessibilityLabel={`Día ${day}`}>
                       <View style={[s.day, key === todayKey && { borderColor: colors.primary }, isSel && { backgroundColor: colors.primary, borderColor: colors.primary }]}>
                         <Text style={[s.dayText, isSel && { color: colors.white }, future && { color: '#B8C4BA' }]}>{day}</Text>
                       </View>

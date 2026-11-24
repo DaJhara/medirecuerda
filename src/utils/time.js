@@ -36,7 +36,7 @@ export function fmtInterval(hours) {
 // UUID v4 generado en el cliente (así los registros locales se pueden fusionar luego con Postgres).
 export function uuid() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
+    const r = Math.trunc(Math.random() * 16);
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }

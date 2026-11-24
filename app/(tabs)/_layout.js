@@ -8,6 +8,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../src/theme';
 import DrawerEdgeSwipe from '../../src/components/DrawerEdgeSwipe';
 
+// Iconos de las pestañas: se crean fuera del componente para no redefinirlos en cada render.
+const tabIcon = (name) =>
+  function TabIcon({ color, size }) {
+    return <Ionicons name={name} size={size} color={color} />;
+  };
+
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
 
@@ -36,9 +42,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: 'Hoy',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="today-outline" size={size} color={color} />
-          ),
+          tabBarIcon: tabIcon('today-outline'),
         }}
       />
 
@@ -46,9 +50,7 @@ export default function TabsLayout() {
         name="meds"
         options={{
           title: 'Medicamentos',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="medkit-outline" size={size} color={color} />
-          ),
+          tabBarIcon: tabIcon('medkit-outline'),
         }}
       />
 
@@ -56,9 +58,7 @@ export default function TabsLayout() {
         name="history"
         options={{
           title: 'Historial',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="stats-chart-outline" size={size} color={color} />
-          ),
+          tabBarIcon: tabIcon('stats-chart-outline'),
         }}
       />
 
@@ -66,9 +66,7 @@ export default function TabsLayout() {
         name="assistant"
         options={{
           title: 'Asistente',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubbles-outline" size={size} color={color} />
-          ),
+          tabBarIcon: tabIcon('chatbubbles-outline'),
         }}
       />
     </Tabs>

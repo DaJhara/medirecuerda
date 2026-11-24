@@ -12,7 +12,15 @@ import { signToken, requireUser, authLimit } from '../middleware/security.js';
 const router = Router();
 router.use(authLimit);
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Valida el correo sin expresiones regulares costosas: una sola "@", texto a ambos lados, un punto en el
+// dominio, terminación de 2 o más letras y sin espacios.
+function isValidEmail(email) {
+  const at = email.indexOf('@');
+  if (at < 1 || at !== email.lastIndexOf('@') || email.length > 254 || /\s/.test(email)) return false;
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf('.');
+  return dot > 0 && domain.length - dot - 1 >= 2;
+}
 const MIN_PASSWORD = 8;
 const RESET_MINUTES = 15;
 const RESET_MAX_ATTEMPTS = 5;
@@ -38,7 +46,7 @@ router.post('/register', async (req, res, next) => {
     const name = clean(req.body?.name);
     const password = String(req.body?.password ?? '');
     if (!name) return bad(res, 400, 'Escribe tu nombre completo.');
-    if (!EMAIL_RE.test(email)) return bad(res, 400, 'Escribe un correo válido.');
+    if (!isValidEmail(email)) return bad(res, 400, 'Escribe un correo válido.');
     if (password.length < MIN_PASSWORD) return bad(res, 400, `La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`);
     if (password.length > 200) return bad(res, 400, 'La contraseña es demasiado larga.');
 
@@ -64,7 +72,7 @@ router.post('/login', async (req, res, next) => {
     const { rows } = await query('SELECT * FROM app_users WHERE lower(email) = $1', [email]);
     const u = rows[0];
     const ok = await bcrypt.compare(password, u?.password_hash || DUMMY_HASH);
-    if (!u || !u.password_hash || !ok) {
+    if (!u?.password_hash || !ok) {
       if (u && !u.password_hash && u.auth_provider === 'google') return bad(res, 400, 'Esta cuenta se creó con Google. Usa "Continuar con Google".');
       return bad(res, 401, 'Correo o contraseña incorrectos.');
     }
@@ -114,7 +122,7 @@ router.post('/google', async (req, res, next) => {
 router.post('/forgot-password', async (req, res, next) => {
   try {
     const email = normEmail(req.body?.email);
-    if (!EMAIL_RE.test(email)) return bad(res, 400, 'Escribe un correo válido.');
+    if (!isValidEmail(email)) return bad(res, 400, 'Escribe un correo válido.');
     const u = (await query('SELECT id, email FROM app_users WHERE lower(email) = $1', [email])).rows[0];
     if (u) {
       const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');

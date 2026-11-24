@@ -39,7 +39,10 @@ export default function AssistantScreen() {
   const contextText = useMemo(() => {
     if (!useContext) return null;
     const active = meds.filter((m) => m.active);
-    const lines = active.map((m) => `- ${m.name}${m.activeIngredient ? ` (${m.activeIngredient})` : ''}: ${m.dose}, ${fmtInterval(m.intervalHours).toLowerCase()}`);
+    const lines = active.map((m) => {
+      const ingredient = m.activeIngredient ? ` (${m.activeIngredient})` : '';
+      return `- ${m.name}${ingredient}: ${m.dose}, ${fmtInterval(m.intervalHours).toLowerCase()}`;
+    });
     const data = [
       profile.age ? `Edad: ${profile.age} años` : null,
       profile.heightCm ? `Estatura: ${profile.heightCm} cm` : null,

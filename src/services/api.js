@@ -1,7 +1,13 @@
 // Cliente HTTP del backend (Railway). Si EXPO_PUBLIC_API_URL está vacío, la app trabaja SIN backend
 // (llama directo a OpenRouter / Serper con las claves EXPO_PUBLIC_*, solo para pruebas).
 // Con el backend configurado, las claves de IA quedan en el servidor y la app no las necesita.
-const API_URL = (process.env.EXPO_PUBLIC_API_URL || '').replace(/\/+$/, '');
+// Quita las barras finales de la URL (sin expresiones regulares).
+function trimTrailingSlashes(url) {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end--;
+  return url.slice(0, end);
+}
+const API_URL = trimTrailingSlashes(process.env.EXPO_PUBLIC_API_URL || '');
 const APP_KEY = process.env.EXPO_PUBLIC_API_KEY || ''; // clave "de la app" (ayuda a filtrar tráfico; no es un secreto real)
 
 export const hasBackend = () => !!API_URL;

@@ -6,7 +6,7 @@ import React from 'react';
 import { View, Text, ScrollView, Switch, StyleSheet, Platform, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Header, Card, Button } from '../src/components/UI';
-import { colors, font } from '../src/theme';
+import { colors } from '../src/theme';
 import { useApp } from '../src/context/AppContext';
 import { openToneSettings, sendTestNotification } from '../src/services/notifications';
 

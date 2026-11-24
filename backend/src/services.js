@@ -53,7 +53,7 @@ async function serper(query) {
     body: JSON.stringify({ q: query, gl: 'co', hl: 'es', num: 10 }),
   }, 12000);
   if (!res.ok) return null;
-  const list = ((await res.json()).images || []).filter((i) => /^https:\/\//.test(i.thumbnailUrl || i.imageUrl || ''));
+  const list = ((await res.json()).images || []).filter((i) => (i.thumbnailUrl || i.imageUrl || '').startsWith('https://'));
   if (!list.length) return null;
   const local = list.find((i) => CO_DOMAINS.some((d) => (i.domain || i.link || '').includes(d)));
   const pick = local || list[0];

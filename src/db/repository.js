@@ -245,7 +245,7 @@ async function loadActionable(db, id) {
     `SELECT d.*, m.dose AS med_dose FROM dose_logs d JOIN medications m ON m.id = d.medication_id WHERE d.id = ?`,
     [id]
   );
-  if (!row || row.status !== 'pending') return { error: 'estado' };
+  if (row?.status !== 'pending') return { error: 'estado' };
   if (Date.parse(row.due_at) > Date.now()) return { error: 'aun-no' }; // botones bloqueados hasta la hora
   return { row };
 }
@@ -729,8 +729,113 @@ async function setMetaImpl(key, value) {
 // sin conexión no se pierde (se envía en la próxima subida). Todo ocurre en una sola transacción.
 // Devuelve cuántas filas cambiaron en cada tabla.
 const num = (v) => (v == null ? null : Number(v));
-const flag = (v) => (v == null ? null : v ? 1 : 0);
+const flag = (v) => {
+  if (v == null) return null;
+  return v ? 1 : 0;
+};
 const newer = (a, b) => Date.parse(a) > Date.parse(b);
+const EPOCH = '1970-01-01T00:00:00.000Z';
+
+// --- Perfil: solo si no hay cambios locales pendientes de subir ---
+async function applyProfile(db, uid, p, stamp) {
+  if (!p) return false;
+  const me = await db.getFirstAsync('SELECT synced_at FROM app_users WHERE id = ?', [uid]);
+  if (me?.synced_at == null) return false;
+  await db.runAsync(
+    `UPDATE app_users SET display_name = COALESCE(NULLIF(?, ''), display_name), photo_url = ?, age = ?, height_cm = ?,
+       weight_kg = ?, observations = ?, updated_at = ?, synced_at = ? WHERE id = ?`,
+    [p.display_name || '', p.photo_url || null, num(p.age), num(p.height_cm), num(p.weight_kg), p.observations || '',
+     p.updated_at || stamp, stamp, uid]);
+  return true;
+}
+
+// Si el horario o la duración cambiaron en otro dispositivo, las tomas pendientes que ya no corresponden se descartan.
+// (Las nuevas llegan en este mismo lote o en el siguiente.)
+async function discardStalePending(db, local, m, logs) {
+  const keep = logs.filter((d) => d.medication_id === m.id).map((d) => d.id);
+  const marks = keep.length ? ` AND id NOT IN (${keep.map(() => '?').join(',')})` : '';
+  const sql = `DELETE FROM dose_logs WHERE medication_id = ? AND status = 'pending' AND scheduled_at >= ?${marks}`;
+  if (local.start_at !== m.start_at || local.frequency_hours !== Number(m.frequency_hours)) {
+    await db.runAsync(sql, [m.id, iso(startOfDay(Date.now())), ...keep]);
+  } else if ((local.duration_days ?? null) !== num(m.duration_days) && m.duration_days) {
+    await db.runAsync(sql, [m.id, iso(Date.parse(m.start_at) + m.duration_days * DAY), ...keep]);
+  }
+}
+
+// Aplica un medicamento del servidor. Devuelve true si cambió algo en SQLite.
+async function applyMedication(db, uid, m, logs, stamp) {
+  const local = await db.getFirstAsync('SELECT * FROM medications WHERE id = ?', [m.id]);
+  // Mismo medicamento (mismo id) pero guardado bajo OTRO usuario local de este teléfono (p. ej. se cambió el
+  // correo de la cuenta): el servidor dice que pertenece a esta sesión, así que se traspasa a este usuario.
+  // Sus tomas e historial lo siguen automáticamente (van enlazados por medication_id).
+  if (local && local.user_id !== uid) {
+    await db.runAsync('UPDATE medications SET user_id = ?, updated_at = ? WHERE id = ?', [uid, EPOCH, m.id]);
+    local.updated_at = EPOCH; // fuerza a que se aplique la versión del servidor
+  }
+  if (local && !newer(m.updated_at, local.updated_at)) return false; // lo local es igual o más nuevo
+  const vals = [m.name, m.active_ingredient || null, m.dose, Number(m.frequency_hours), m.start_at, num(m.duration_days),
+    m.notes || '', m.reference_image_url || null, m.reference_image_source || null, Number(m.schedule_shift_ms || 0),
+    m.active ? 1 : 0, m.updated_at, m.deleted_at || null, stamp];
+  if (!local) {
+    await db.runAsync(
+      `INSERT INTO medications (name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
+         reference_image_url, reference_image_source, schedule_shift_ms, active, updated_at, deleted_at, synced_at, id, user_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [...vals, m.id, uid, m.created_at || stamp]);
+    return true;
+  }
+  await db.runAsync(
+    `UPDATE medications SET name=?, active_ingredient=?, dose=?, frequency_hours=?, start_at=?, duration_days=?, notes=?,
+       reference_image_url=?, reference_image_source=?, schedule_shift_ms=?, active=?, updated_at=?, deleted_at=?, synced_at=?
+     WHERE id=?`, [...vals, m.id]);
+  await discardStalePending(db, local, m, logs);
+  return true;
+}
+
+// Aplica una toma del servidor. Devuelve true si cambió algo en SQLite.
+async function applyDoseLog(db, uid, d, stamp) {
+  const owned = await db.getFirstAsync('SELECT 1 AS x FROM medications WHERE id = ? AND user_id = ?', [d.medication_id, uid]);
+  if (!owned) return false;
+  const local = await db.getFirstAsync('SELECT updated_at FROM dose_logs WHERE id = ?', [d.id]);
+  const vals = [d.due_at, d.status, d.dose_taken || null, d.action_at || null, flag(d.on_time), Number(d.snooze_count || 0),
+    d.postponed_to || null, d.auto_skipped ? 1 : 0, d.updated_at, stamp];
+  if (local) {
+    if (!newer(d.updated_at, local.updated_at)) return false;
+    await db.runAsync(
+      `UPDATE dose_logs SET due_at=?, status=?, dose_taken=?, action_at=?, on_time=?, snooze_count=?, postponed_to=?,
+         auto_skipped=?, updated_at=?, synced_at=? WHERE id=?`, [...vals, d.id]);
+    return true;
+  }
+  // Otra toma local del mismo medicamento y hora (generada sin conexión con otro id): gana la más nueva.
+  const clash = await db.getFirstAsync('SELECT id, updated_at FROM dose_logs WHERE medication_id = ? AND scheduled_at = ?', [d.medication_id, d.scheduled_at]);
+  if (clash) {
+    if (newer(clash.updated_at, d.updated_at)) return false;
+    await db.runAsync('DELETE FROM dose_logs WHERE id = ?', [clash.id]);
+  }
+  await db.runAsync(
+    `INSERT INTO dose_logs (due_at, status, dose_taken, action_at, on_time, snooze_count, postponed_to, auto_skipped,
+       updated_at, synced_at, id, medication_id, scheduled_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [...vals, d.id, d.medication_id, d.scheduled_at, d.created_at || stamp]);
+  return true;
+}
+
+// Bitácora de eventos (inmutable: solo se agregan los que faltan). Devuelve cuántas filas se insertaron.
+async function applyDoseEvent(db, e, stamp) {
+  if (!(await db.getFirstAsync('SELECT 1 AS x FROM dose_logs WHERE id = ?', [e.dose_log_id]))) return 0;
+  const r = await db.runAsync(
+    `INSERT OR IGNORE INTO dose_events (id, dose_log_id, medication_id, event_type, event_at, scheduled_at,
+       postponed_from, postponed_to, created_at, synced_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    [e.id, e.dose_log_id, e.medication_id, e.event_type, e.event_at, e.scheduled_at, e.postponed_from || null,
+     e.postponed_to || null, e.created_at || stamp, stamp]);
+  return r.changes || 0;
+}
+
+// Aplica una lista en orden y cuenta cuántas filas cambiaron (secuencial a propósito: una sola conexión y
+// una sola transacción SQLite, y las filas se comparan contra lo ya escrito).
+async function countApplied(list, applyOne) {
+  let n = 0;
+  for (const item of list) if (await applyOne(item)) n++; // eslint-disable-line no-await-in-loop
+  return n;
+}
 
 async function applyServerSnapshotImpl(data) {
   const db = await getDb();
@@ -741,96 +846,10 @@ async function applyServerSnapshotImpl(data) {
   const logs = data.doseLogs || [];
 
   await db.withTransactionAsync(async () => {
-    // --- Perfil: solo si no hay cambios locales pendientes de subir ---
-    const p = data.profile;
-    if (p) {
-      const me = await db.getFirstAsync('SELECT synced_at FROM app_users WHERE id = ?', [uid]);
-      if (me && me.synced_at != null) {
-        await db.runAsync(
-          `UPDATE app_users SET display_name = COALESCE(NULLIF(?, ''), display_name), photo_url = ?, age = ?, height_cm = ?,
-             weight_kg = ?, observations = ?, updated_at = ?, synced_at = ? WHERE id = ?`,
-          [p.display_name || '', p.photo_url || null, num(p.age), num(p.height_cm), num(p.weight_kg), p.observations || '',
-           p.updated_at || stamp, stamp, uid]);
-        out.profile = true;
-      }
-    }
-
-    // --- Medicamentos ---
-    for (const m of data.medications || []) {
-      const local = await db.getFirstAsync('SELECT * FROM medications WHERE id = ?', [m.id]);
-      // Mismo medicamento (mismo id) pero guardado bajo OTRO usuario local de este teléfono (p. ej. se cambió el
-      // correo de la cuenta): el servidor dice que pertenece a esta sesión, así que se traspasa a este usuario.
-      // Sus tomas e historial lo siguen automáticamente (van enlazados por medication_id).
-      if (local && local.user_id !== uid) {
-        await db.runAsync('UPDATE medications SET user_id = ?, updated_at = ? WHERE id = ?', [uid, '1970-01-01T00:00:00.000Z', m.id]);
-        local.updated_at = '1970-01-01T00:00:00.000Z'; // fuerza a que se aplique la versión del servidor
-      }
-      if (local && !newer(m.updated_at, local.updated_at)) continue; // lo local es igual o más nuevo
-      const vals = [m.name, m.active_ingredient || null, m.dose, Number(m.frequency_hours), m.start_at, num(m.duration_days),
-        m.notes || '', m.reference_image_url || null, m.reference_image_source || null, Number(m.schedule_shift_ms || 0),
-        m.active ? 1 : 0, m.updated_at, m.deleted_at || null, stamp];
-      if (local) {
-        await db.runAsync(
-          `UPDATE medications SET name=?, active_ingredient=?, dose=?, frequency_hours=?, start_at=?, duration_days=?, notes=?,
-             reference_image_url=?, reference_image_source=?, schedule_shift_ms=?, active=?, updated_at=?, deleted_at=?, synced_at=?
-           WHERE id=?`, [...vals, m.id]);
-        // Si el horario o la duración cambiaron en otro dispositivo, las tomas pendientes que ya no corresponden se descartan.
-        // (Las nuevas llegan en este mismo lote o en el siguiente.)
-        const keep = logs.filter((d) => d.medication_id === m.id).map((d) => d.id);
-        const marks = keep.length ? ` AND id NOT IN (${keep.map(() => '?').join(',')})` : '';
-        if (local.start_at !== m.start_at || local.frequency_hours !== Number(m.frequency_hours)) {
-          await db.runAsync(`DELETE FROM dose_logs WHERE medication_id = ? AND status = 'pending' AND scheduled_at >= ?${marks}`,
-            [m.id, iso(startOfDay(Date.now())), ...keep]);
-        } else if ((local.duration_days ?? null) !== num(m.duration_days) && m.duration_days) {
-          await db.runAsync(`DELETE FROM dose_logs WHERE medication_id = ? AND status = 'pending' AND scheduled_at >= ?${marks}`,
-            [m.id, iso(Date.parse(m.start_at) + m.duration_days * DAY), ...keep]);
-        }
-      } else {
-        await db.runAsync(
-          `INSERT INTO medications (name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
-             reference_image_url, reference_image_source, schedule_shift_ms, active, updated_at, deleted_at, synced_at, id, user_id, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [...vals, m.id, uid, m.created_at || stamp]);
-      }
-      out.medications++;
-    }
-
-    // --- Tomas ---
-    for (const d of logs) {
-      if (!(await db.getFirstAsync('SELECT 1 AS x FROM medications WHERE id = ? AND user_id = ?', [d.medication_id, uid]))) continue;
-      const local = await db.getFirstAsync('SELECT updated_at FROM dose_logs WHERE id = ?', [d.id]);
-      const vals = [d.due_at, d.status, d.dose_taken || null, d.action_at || null, flag(d.on_time), Number(d.snooze_count || 0),
-        d.postponed_to || null, d.auto_skipped ? 1 : 0, d.updated_at, stamp];
-      if (local) {
-        if (!newer(d.updated_at, local.updated_at)) continue;
-        await db.runAsync(
-          `UPDATE dose_logs SET due_at=?, status=?, dose_taken=?, action_at=?, on_time=?, snooze_count=?, postponed_to=?,
-             auto_skipped=?, updated_at=?, synced_at=? WHERE id=?`, [...vals, d.id]);
-      } else {
-        // Otra toma local del mismo medicamento y hora (generada sin conexión con otro id): gana la más nueva.
-        const clash = await db.getFirstAsync('SELECT id, updated_at FROM dose_logs WHERE medication_id = ? AND scheduled_at = ?', [d.medication_id, d.scheduled_at]);
-        if (clash) {
-          if (newer(clash.updated_at, d.updated_at)) continue;
-          await db.runAsync('DELETE FROM dose_logs WHERE id = ?', [clash.id]);
-        }
-        await db.runAsync(
-          `INSERT INTO dose_logs (due_at, status, dose_taken, action_at, on_time, snooze_count, postponed_to, auto_skipped,
-             updated_at, synced_at, id, medication_id, scheduled_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-          [...vals, d.id, d.medication_id, d.scheduled_at, d.created_at || stamp]);
-      }
-      out.doseLogs++;
-    }
-
-    // --- Bitácora de eventos (inmutable: solo se agregan los que faltan) ---
-    for (const e of data.doseEvents || []) {
-      if (!(await db.getFirstAsync('SELECT 1 AS x FROM dose_logs WHERE id = ?', [e.dose_log_id]))) continue;
-      const r = await db.runAsync(
-        `INSERT OR IGNORE INTO dose_events (id, dose_log_id, medication_id, event_type, event_at, scheduled_at,
-           postponed_from, postponed_to, created_at, synced_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-        [e.id, e.dose_log_id, e.medication_id, e.event_type, e.event_at, e.scheduled_at, e.postponed_from || null,
-         e.postponed_to || null, e.created_at || stamp, stamp]);
-      out.doseEvents += r.changes || 0;
-    }
-
+    out.profile = await applyProfile(db, uid, data.profile, stamp);
+    out.medications = await countApplied(data.medications || [], (m) => applyMedication(db, uid, m, logs, stamp));
+    out.doseLogs = await countApplied(logs, (d) => applyDoseLog(db, uid, d, stamp));
+    for (const e of data.doseEvents || []) out.doseEvents += await applyDoseEvent(db, e, stamp); // eslint-disable-line no-await-in-loop
     if (data.serverTime) await db.runAsync("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('last_pull_at', ?)", [data.serverTime]);
   });
   return out;

@@ -7,7 +7,8 @@ import { signInWithGoogle, signOutGoogle } from './googleAuth';
 
 const ROUNDS = 200;
 const MIN_PASSWORD = 8;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const OFFLINE_RE = /no se pudo conectar|tardó demasiado/i;
+const EXISTS_RE = /ya existe|already exists/i;
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
 async function hashPassword(password, salt) {
@@ -21,12 +22,23 @@ const newSalt = () => Array.from(Crypto.getRandomBytes(16), (b) => b.toString(16
 function safeEqual(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < a.length; i++) diff |= a.codePointAt(i) ^ b.codePointAt(i);
   return diff === 0;
 }
 
+// Valida el correo sin expresiones regulares costosas: una sola "@", texto a ambos lados, un punto en el
+// dominio y una terminación de 2 o más letras; sin espacios.
+function isValidEmail(value) {
+  const email = (value || '').trim();
+  const at = email.indexOf('@');
+  if (at < 1 || at !== email.lastIndexOf('@') || email.length > 254 || /\s/.test(email)) return false;
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf('.');
+  return dot > 0 && domain.length - dot - 1 >= 2;
+}
+
 export function validateEmail(email) {
-  return EMAIL_RE.test((email || '').trim()) ? null : 'Escribe un correo válido (ejemplo: nombre@correo.com).';
+  return isValidEmail(email) ? null : 'Escribe un correo válido (ejemplo: nombre@correo.com).';
 }
 export function validatePassword(password) {
   return (password || '').length >= MIN_PASSWORD ? null : `La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`;
@@ -53,41 +65,50 @@ export async function register({ name, email, password }) {
   return repo.createPasswordAccount({ email, name, hash, salt });
 }
 
+// Cuenta antigua solo-local: si la contraseña coincide con la credencial local, intenta crearla en el servidor
+// con la misma contraseña (migración transparente). Si no aplica, relanza el error original del servidor.
+async function migrateLocalAccount({ email, password, serverError }) {
+  const acc = await repo.findAccount(email);
+  if (!acc?.hash || !safeEqual(await hashPassword(password, acc.salt), acc.hash)) throw serverError;
+  try {
+    const created = await api('/auth/register', {
+      method: 'POST', body: { name: acc.name || 'Usuario', email: email.trim().toLowerCase(), password },
+    });
+    return await saveServerSession(created);
+  } catch (migrationError) {
+    const msg = migrationError.message || '';
+    // Si el servidor dice que el correo ya existe, no sobrescribimos su contraseña.
+    if (EXISTS_RE.test(msg)) throw serverError;
+    // Si no hay conexión con Render, se permite entrar localmente sin token remoto.
+    if (OFFLINE_RE.test(msg)) return repo.startSession(acc.id);
+    throw migrationError;
+  }
+}
+
+// Inicio de sesión contra el servidor (con respaldo a la migración de cuentas antiguas).
+async function loginRemote({ email, password }) {
+  try {
+    const data = await api('/auth/login', { method: 'POST', body: { email: email.trim().toLowerCase(), password } });
+    return await saveServerSession(data);
+  } catch (serverError) {
+    return migrateLocalAccount({ email, password, serverError });
+  }
+}
+
+// Inicio de sesión solo-local (sin backend configurado).
+async function loginLocal({ email, password }) {
+  const acc = await repo.findAccount(email);
+  if (!acc) throw fail('BAD_CREDENTIALS', 'Correo o contraseña incorrectos.');
+  if (!acc.hash) throw fail('USE_GOOGLE', 'Esta cuenta se creó con Google. Usa el botón "Continuar con Google".');
+  if (!safeEqual(await hashPassword(password, acc.salt), acc.hash)) throw fail('BAD_CREDENTIALS', 'Correo o contraseña incorrectos.');
+  return repo.startSession(acc.id);
+}
+
 export async function login({ email, password }) {
   const e = validateEmail(email);
   if (e) throw fail('INVALID', e);
   if (!password) throw fail('INVALID', 'Escribe tu contraseña.');
-
-  if (hasBackend()) {
-    try {
-      const data = await api('/auth/login', { method: 'POST', body: { email: email.trim().toLowerCase(), password } });
-      return await saveServerSession(data);
-    } catch (serverError) {
-      // Migración transparente de cuentas antiguas: si la contraseña coincide con
-      // la credencial local, intenta crear la cuenta remota con la misma contraseña.
-      const acc = await repo.findAccount(email);
-      if (!acc?.hash || !safeEqual(await hashPassword(password, acc.salt), acc.hash)) throw serverError;
-      try {
-        const created = await api('/auth/register', {
-          method: 'POST', body: { name: acc.name || 'Usuario', email: email.trim().toLowerCase(), password },
-        });
-        return await saveServerSession(created);
-      } catch (migrationError) {
-        // Si el servidor dice que el correo ya existe, no sobrescribimos su contraseña.
-        if (/ya existe|already exists/i.test(migrationError.message || '')) throw serverError;
-        // Si no hay conexión con Render, se permite entrar localmente sin token remoto.
-        if (/no se pudo conectar|tardó demasiado/i.test(migrationError.message || '')) return repo.startSession(acc.id);
-        throw migrationError;
-      }
-    }
-  }
-
-  const acc = await repo.findAccount(email);
-  const bad = fail('BAD_CREDENTIALS', 'Correo o contraseña incorrectos.');
-  if (!acc) throw bad;
-  if (!acc.hash) throw fail('USE_GOOGLE', 'Esta cuenta se creó con Google. Usa el botón "Continuar con Google".');
-  if (!safeEqual(await hashPassword(password, acc.salt), acc.hash)) throw bad;
-  return repo.startSession(acc.id);
+  return hasBackend() ? loginRemote({ email, password }) : loginLocal({ email, password });
 }
 
 // Google permanece como estaba: requiere un development build y que Google esté

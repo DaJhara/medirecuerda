@@ -3,7 +3,7 @@
 //
 // Cada acción (Tomé / Aplazar / Omitir / editar...) escribe en la BD, vuelve a leer los datos
 // y reprograma las notificaciones, de modo que la pantalla siempre refleja lo guardado.
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { AppState } from 'react-native';
 import * as repo from '../db/repository';
 import { getDb } from '../db/database';
@@ -81,7 +81,7 @@ export function AppProvider({ children }) {
   // Carga inicial: abre la BD, recupera la sesión (si existe) y pide permisos.
   useEffect(() => {
     wakeServer(); // despierta el servidor mientras se abre la base local
-    (async () => {
+    void (async () => {
       try {
         await getDb();
         const savedSettings = await repo.getSettings();
@@ -249,11 +249,17 @@ export function AppProvider({ children }) {
     doSync();
   }, [meds, refresh, doSync]);
 
-  const value = {
+  // El valor del contexto se memoriza: solo cambia cuando cambian los datos, no en cada render.
+  const value = useMemo(() => ({
     meds, todayDoses, ready, session, profile, settings, saveProfile, updateSettings,
     signUp, signIn, signInGoogle, signOut,
     takeDose, skipDose, snoozeDose, undoDose,
     saveMed, saveMany, deleteMed, toggleActive, fetchImage,
-  };
+  }), [
+    meds, todayDoses, ready, session, profile, settings, saveProfile, updateSettings,
+    signUp, signIn, signInGoogle, signOut,
+    takeDose, skipDose, snoozeDose, undoDose,
+    saveMed, saveMany, deleteMed, toggleActive, fetchImage,
+  ]);
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

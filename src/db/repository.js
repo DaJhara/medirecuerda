@@ -756,6 +756,13 @@ async function applyServerSnapshotImpl(data) {
     // --- Medicamentos ---
     for (const m of data.medications || []) {
       const local = await db.getFirstAsync('SELECT * FROM medications WHERE id = ?', [m.id]);
+      // Mismo medicamento (mismo id) pero guardado bajo OTRO usuario local de este teléfono (p. ej. se cambió el
+      // correo de la cuenta): el servidor dice que pertenece a esta sesión, así que se traspasa a este usuario.
+      // Sus tomas e historial lo siguen automáticamente (van enlazados por medication_id).
+      if (local && local.user_id !== uid) {
+        await db.runAsync('UPDATE medications SET user_id = ?, updated_at = ? WHERE id = ?', [uid, '1970-01-01T00:00:00.000Z', m.id]);
+        local.updated_at = '1970-01-01T00:00:00.000Z'; // fuerza a que se aplique la versión del servidor
+      }
       if (local && !newer(m.updated_at, local.updated_at)) continue; // lo local es igual o más nuevo
       const vals = [m.name, m.active_ingredient || null, m.dose, Number(m.frequency_hours), m.start_at, num(m.duration_days),
         m.notes || '', m.reference_image_url || null, m.reference_image_source || null, Number(m.schedule_shift_ms || 0),
@@ -838,8 +845,13 @@ async function clearRemoteAuthImpl() {
   await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id', 'last_pull_at')");
 }
 
-async function signOutImpl() {
+// Cierra la sesión. Con { wipe: true } (cuenta del servidor) también borra la copia local del usuario:
+// medicamentos, tomas, historial y perfil (el servidor es la fuente principal y al volver a entrar se descarga todo).
+// Las filas hijas se eliminan en cascada.
+async function signOutImpl({ wipe = false } = {}) {
   const db = await getDb();
+  const uid = await getCurrentUserId(db);
+  if (wipe && uid) await db.runAsync('DELETE FROM app_users WHERE id = ?', [uid]);
   await setCurrentUserId(db, null);
   await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id', 'last_pull_at')");
 }
@@ -907,7 +919,7 @@ export const setPassword = (id, hash, salt) => serial(() => setPasswordImpl(id, 
 export const purgeFinishedMeds = () => serial(purgeFinishedImpl);
 export const startSession = (id) => serial(() => startSessionImpl(id));
 export const signInGoogleUser = (g) => serial(() => signInGoogleUserImpl(g));
-export const signOutUser = () => serial(signOutImpl);
+export const signOutUser = (opts) => serial(() => signOutImpl(opts));
 export const getWeekSummary = (days) => serial(() => getWeekSummaryImpl(days));
 export const getProfile = () => serial(getProfileImpl);
 export const saveProfile = (p) => serial(() => saveProfileImpl(p));

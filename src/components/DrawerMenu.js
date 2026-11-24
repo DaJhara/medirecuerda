@@ -62,10 +62,10 @@ export default function DrawerMenu() {
   };
 
   // Cerrar sesión: pide confirmación, cierra la sesión y la app vuelve sola a la pantalla de login.
-  // Los datos del usuario se conservan en el teléfono para cuando vuelva a entrar.
+  // Con cuenta del servidor, los datos se suben y la copia del teléfono se borra; al volver a entrar se descargan.
   const logout = async () => {
     close();
-    const ok = await confirmAction('Cerrar sesión', '¿Quieres cerrar tu sesión? Dejarás de recibir recordatorios hasta que vuelvas a entrar.', 'Cerrar sesión', true);
+    const ok = await confirmAction('Cerrar sesión', '¿Quieres cerrar tu sesión? Tus datos quedan guardados en tu cuenta, se quitarán de este teléfono y dejarás de recibir recordatorios hasta que vuelvas a entrar.', 'Cerrar sesión', true);
     if (!ok) return;
     try {
       await signOut();

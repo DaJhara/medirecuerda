@@ -11,6 +11,8 @@ import { configureNotifications, ensurePermissions, ensureChannel, rescheduleAll
 import { findReferenceImage } from '../services/imageSearch';
 import * as auth from '../services/auth';
 import { syncNow } from '../services/sync';
+import { hasBackend } from '../services/api';
+import { confirmAction } from '../utils/dialog';
 import { dayKey } from '../utils/time';
 
 configureNotifications();
@@ -140,6 +142,18 @@ export function AppProvider({ children }) {
   }, [enterSession]);
 
   const signOut = useCallback(async () => {
+    // Antes de borrar la copia local se suben los últimos cambios. Si no hay conexión, se avisa
+    // porque lo que no alcanzó a subirse se perdería.
+    if (hasBackend() && (await repo.getRemoteAuthToken())) {
+      const r = await doSync({ timeout: 8000 });
+      if (!r || r.skipped) {
+        const go = await confirmAction(
+          'Sin conexión con el servidor',
+          'No se pudieron subir tus últimos cambios. Si cierras sesión ahora, lo que no se haya subido se perderá de este teléfono. ¿Cerrar sesión de todos modos?',
+          'Cerrar sesión', true);
+        if (!go) return false;
+      }
+    }
     await auth.logout();
     sessionRef.current = null;
     await rescheduleAll([], settingsRef.current).catch(() => {}); // cancela los recordatorios de este usuario
@@ -147,7 +161,8 @@ export function AppProvider({ children }) {
     setTodayDoses([]);
     setProfile(EMPTY_PROFILE);
     setSession(null); // el layout redirige solo a la pantalla de login
-  }, []);
+    return true;
+  }, [doSync]);
 
   // ---- Perfil ----
   const saveProfile = useCallback(async (p) => {

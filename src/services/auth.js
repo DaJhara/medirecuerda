@@ -146,8 +146,11 @@ export async function changePassword({ current, newPassword }) {
   }
 }
 
+// Cierra la sesión. Si la cuenta está vinculada al servidor, la copia local se borra (los datos siguen en el
+// servidor y se descargan al volver a entrar). Una cuenta solo-local NO se borra: no existe otra copia.
 export async function logout() {
-  await repo.signOutUser();
+  const linked = !!(await repo.getRemoteAuthToken());
+  await repo.signOutUser({ wipe: linked });
   await repo.clearRemoteAuth();
   await signOutGoogle();
 }

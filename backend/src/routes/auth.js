@@ -45,7 +45,7 @@ router.post('/register', async (req, res, next) => {
     if ((await query('SELECT 1 FROM app_users WHERE lower(email) = $1', [email])).rowCount) {
       return bad(res, 409, 'Ya existe una cuenta con ese correo.');
     }
-    const hash = await bcrypt.hash(password, 12);
+    const hash = await bcrypt.hash(password, 10);
     const { rows } = await query(
       `INSERT INTO app_users (email, auth_provider, display_name, password_hash)
        VALUES ($1, 'password', $2, $3) RETURNING *`, [email, name, hash]);
@@ -155,7 +155,7 @@ router.post('/reset-password', async (req, res, next) => {
       return invalid();
     }
     await query('UPDATE app_users SET password_hash = $2, auth_provider = CASE WHEN auth_provider = \'local\' THEN \'password\' ELSE auth_provider END, updated_at = now() WHERE id = $1',
-      [u.id, await bcrypt.hash(password, 12)]);
+      [u.id, await bcrypt.hash(password, 10)]);
     await query('UPDATE password_resets SET used_at = now() WHERE id = $1', [r.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -170,7 +170,7 @@ router.post('/change-password', requireUser, async (req, res, next) => {
     const u = (await query('SELECT * FROM app_users WHERE id = $1', [req.user.id])).rows[0];
     if (!u?.password_hash) return bad(res, 400, 'Tu cuenta usa Google: no tiene contraseña en MediRecuerda.');
     if (!(await bcrypt.compare(current, u.password_hash))) return bad(res, 401, 'La contraseña actual no es correcta.');
-    await query('UPDATE app_users SET password_hash = $2, updated_at = now() WHERE id = $1', [u.id, await bcrypt.hash(password, 12)]);
+    await query('UPDATE app_users SET password_hash = $2, updated_at = now() WHERE id = $1', [u.id, await bcrypt.hash(password, 10)]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

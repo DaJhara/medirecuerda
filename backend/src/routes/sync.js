@@ -62,6 +62,7 @@ router.post('/push', async (req, res, next) => {
 
     // Primero medicamentos: las tomas y los eventos dependen de ellos.
     for (const m of medications) {
+      const prev = (await client.query('SELECT start_at, frequency_hours FROM medications WHERE id=$1 AND user_id=$2', [m.id, req.user.id])).rows[0];
       if (!m.name || !m.dose || !m.start_at || !Number.isInteger(Number(m.frequency_hours)) || Number(m.frequency_hours) < 1 || Number(m.frequency_hours) > 24) {
         throw Object.assign(new Error('Hay un medicamento con datos obligatorios no válidos.'), { status: 400 });
       }
@@ -86,9 +87,10 @@ router.post('/push', async (req, res, next) => {
           dateOrNull(m.updated_at), dateOrNull(m.deleted_at)]
       );
       medsSaved += r.rowCount;
-      // Si este cambio de medicamento fue aceptado, las tomas PENDIENTES más viejas que él y que el teléfono ya no
+      // Si este cambio de HORARIO fue aceptado, las tomas PENDIENTES más viejas que él y que el teléfono ya no
       // tiene (porque cambió el horario) se descartan también aquí, para que no regresen en la próxima descarga.
-      if (r.rowCount === 1) {
+      const scheduleChanged = prev && (prev.frequency_hours !== Number(m.frequency_hours) || new Date(prev.start_at).getTime() !== new Date(m.start_at).getTime());
+      if (r.rowCount === 1 && scheduleChanged) {
         const keep = doseLogs.filter((d) => d.medication_id === m.id).map((d) => d.id);
         await client.query(
           `DELETE FROM dose_logs WHERE medication_id=$1 AND status='pending' AND created_at < $2 AND NOT (id = ANY($3::uuid[]))`,
@@ -179,22 +181,28 @@ router.get('/pull', async (req, res, next) => {
     // Se toma la hora del servidor ANTES de leer: lo que cambie durante la lectura se vuelve a enviar la próxima vez.
     const serverTime = (await query('SELECT now() AS t')).rows[0].t.toISOString();
 
-    const profile = (await query(
-      `SELECT display_name, photo_url, age, height_cm, weight_kg, observations, updated_at FROM app_users WHERE id=$1`, [uid])).rows[0] || null;
-    const medications = (await query(
-      `SELECT id, name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
-              reference_image_url, reference_image_source, schedule_shift_ms, active, created_at, updated_at, deleted_at
-       FROM medications WHERE user_id=$1 AND ($2::timestamptz IS NULL OR server_updated_at > $2) ORDER BY created_at`, [uid, since])).rows;
-    const doseLogs = (await query(
-      `SELECT d.id, d.medication_id, d.scheduled_at, d.due_at, d.status, d.dose_taken, d.action_at, d.on_time,
-              d.snooze_count, d.postponed_to, d.auto_skipped, d.created_at, d.updated_at
-       FROM dose_logs d JOIN medications m ON m.id = d.medication_id
-       WHERE m.user_id=$1 AND ($2::timestamptz IS NULL OR d.server_updated_at > $2) ORDER BY d.scheduled_at`, [uid, since])).rows;
-    const doseEvents = (await query(
-      `SELECT e.id, e.dose_log_id, e.medication_id, e.event_type, e.event_at, e.scheduled_at,
-              e.postponed_from, e.postponed_to, e.created_at
-       FROM dose_events e JOIN medications m ON m.id = e.medication_id
-       WHERE m.user_id=$1 AND ($2::timestamptz IS NULL OR e.server_updated_at > $2) ORDER BY e.event_at`, [uid, since])).rows;
+    // Las cuatro consultas son independientes: se lanzan a la vez para tardar lo que tarde la más lenta.
+    const [pr, mr, dr, er] = await Promise.all([
+      query(`SELECT display_name, photo_url, age, height_cm, weight_kg, observations, updated_at FROM app_users WHERE id=$1`, [uid]),
+      query(
+        `SELECT id, name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
+                reference_image_url, reference_image_source, schedule_shift_ms, active, created_at, updated_at, deleted_at
+         FROM medications WHERE user_id=$1 AND ($2::timestamptz IS NULL OR server_updated_at > $2) ORDER BY created_at`, [uid, since]),
+      query(
+        `SELECT d.id, d.medication_id, d.scheduled_at, d.due_at, d.status, d.dose_taken, d.action_at, d.on_time,
+                d.snooze_count, d.postponed_to, d.auto_skipped, d.created_at, d.updated_at
+         FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+         WHERE m.user_id=$1 AND ($2::timestamptz IS NULL OR d.server_updated_at > $2) ORDER BY d.scheduled_at`, [uid, since]),
+      query(
+        `SELECT e.id, e.dose_log_id, e.medication_id, e.event_type, e.event_at, e.scheduled_at,
+                e.postponed_from, e.postponed_to, e.created_at
+         FROM dose_events e JOIN medications m ON m.id = e.medication_id
+         WHERE m.user_id=$1 AND ($2::timestamptz IS NULL OR e.server_updated_at > $2) ORDER BY e.event_at`, [uid, since]),
+    ]);
+    const profile = pr.rows[0] || null;
+    const medications = mr.rows;
+    const doseLogs = dr.rows;
+    const doseEvents = er.rows;
 
     res.json({ ok: true, serverTime, profile, medications, doseLogs, doseEvents });
   } catch (e) { next(e); }

@@ -647,7 +647,7 @@ async function linkRemoteAccountImpl({ user, token }) {
       `SELECT (SELECT COUNT(*) FROM medications WHERE user_id = ?) AS meds,
               (SELECT (age IS NOT NULL OR height_cm IS NOT NULL OR weight_kg IS NOT NULL OR COALESCE(observations,'') <> '') FROM app_users WHERE id = ?) AS prof`, [id, id]);
     if (!hasData.meds && !hasData.prof) await db.runAsync('UPDATE app_users SET synced_at = ? WHERE id = ?', [iso(Date.now()), id]);
-    await db.runAsync("DELETE FROM app_meta WHERE key = 'last_pull_at'"); // primera descarga completa
+    await db.runAsync("DELETE FROM app_meta WHERE key IN ('last_pull_at', 'last_push_at', 'last_full_push_at')"); // primera descarga y subida completas
     await db.runAsync("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('remote_auth_token', ?)", [token]);
     await db.runAsync("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('remote_user_id', ?)", [String(user.id || '')]);
   });
@@ -656,7 +656,9 @@ async function linkRemoteAccountImpl({ user, token }) {
 
 // Prepara una copia completa e idempotente de los datos del usuario actual.
 // Los IDs locales se conservan; el backend los asocia al usuario del JWT.
-async function getSyncSnapshotImpl() {
+// Con "since" (texto ISO) solo se incluyen las filas creadas o modificadas después de esa hora (subida incremental);
+// sin "since" se envía todo.
+async function getSyncSnapshotImpl(since = null) {
   const db = await getDb();
   const uid = await getCurrentUserId(db);
   if (!uid) throw new Error('No hay una sesión local activa.');
@@ -669,20 +671,20 @@ async function getSyncSnapshotImpl() {
     `SELECT id, name, active_ingredient, dose, frequency_hours, start_at, duration_days,
             notes, reference_image_url, reference_image_source, schedule_shift_ms,
             active, created_at, updated_at, deleted_at
-     FROM medications WHERE user_id = ? ORDER BY created_at`, [uid]
+     FROM medications WHERE user_id = ? AND (? IS NULL OR updated_at > ?) ORDER BY created_at`, [uid, since, since]
   );
   const doseLogs = await db.getAllAsync(
     `SELECT d.id, d.medication_id, d.scheduled_at, d.due_at, d.status, d.dose_taken,
             d.action_at, d.on_time, d.snooze_count, d.postponed_to, d.auto_skipped,
             d.created_at, d.updated_at
      FROM dose_logs d JOIN medications m ON m.id = d.medication_id
-     WHERE m.user_id = ? ORDER BY d.scheduled_at`, [uid]
+     WHERE m.user_id = ? AND (? IS NULL OR d.updated_at > ?) ORDER BY d.scheduled_at`, [uid, since, since]
   );
   const doseEvents = await db.getAllAsync(
     `SELECT e.id, e.dose_log_id, e.medication_id, e.event_type, e.event_at,
             e.scheduled_at, e.postponed_from, e.postponed_to, e.created_at
      FROM dose_events e JOIN medications m ON m.id = e.medication_id
-     WHERE m.user_id = ? ORDER BY e.event_at`, [uid]
+     WHERE m.user_id = ? AND (? IS NULL OR e.created_at > ?) ORDER BY e.event_at`, [uid, since, since]
   );
 
   // El perfil solo se envía si tiene cambios sin sincronizar (synced_at NULL); si no, se recibe del servidor.
@@ -842,7 +844,7 @@ async function getRemoteAuthTokenImpl() {
 
 async function clearRemoteAuthImpl() {
   const db = await getDb();
-  await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id', 'last_pull_at')");
+  await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id', 'last_pull_at', 'last_push_at', 'last_full_push_at')");
 }
 
 // Cierra la sesión. Con { wipe: true } (cuenta del servidor) también borra la copia local del usuario:
@@ -853,7 +855,7 @@ async function signOutImpl({ wipe = false } = {}) {
   const uid = await getCurrentUserId(db);
   if (wipe && uid) await db.runAsync('DELETE FROM app_users WHERE id = ?', [uid]);
   await setCurrentUserId(db, null);
-  await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id', 'last_pull_at')");
+  await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id', 'last_pull_at', 'last_push_at', 'last_full_push_at')");
 }
 
 // ---------------------------------------------------------------------------
@@ -909,7 +911,7 @@ export const createPasswordAccount = (d) => serial(() => createPasswordAccountIm
 export const findAccount = (email) => serial(() => findAccountImpl(email));
 export const linkRemoteAccount = (data) => serial(() => linkRemoteAccountImpl(data));
 export const getRemoteAuthToken = () => serial(getRemoteAuthTokenImpl);
-export const getSyncSnapshot = () => serial(getSyncSnapshotImpl);
+export const getSyncSnapshot = (since) => serial(() => getSyncSnapshotImpl(since));
 export const clearRemoteAuth = () => serial(clearRemoteAuthImpl);
 export const markProfileSynced = (stamp) => serial(() => markProfileSyncedImpl(stamp));
 export const getMeta = (k) => serial(() => getMetaImpl(k));

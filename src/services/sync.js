@@ -14,23 +14,37 @@ const OFFLINE = /no se pudo conectar|tardó demasiado/i;
 let running = null;   // sincronización en curso (se comparte entre quienes la piden a la vez)
 let rerun = false;    // se pidió otra mientras corría: se repite una vez al terminar
 
-// Una vuelta completa: subir y luego bajar. Devuelve { skipped?, pushed, pulled: {profile, medications, doseLogs, doseEvents}, changed }
-async function cycle(timeout) {
+const FULL_PUSH_EVERY_MS = 24 * 3600 * 1000; // red de seguridad: una subida completa al día
+
+// Una vuelta: subir y/o bajar. Devuelve { skipped?, pushed, pulled, changed }
+//   pullOnly: solo descarga (arranque en un teléfono vacío: lo más rápido para ver los datos)
+//   pushOnly: solo sube (cierre de sesión: no hace falta bajar nada)
+async function cycle({ timeout, pullOnly = false, pushOnly = false }) {
   const token = await repo.getRemoteAuthToken();
   if (!token) return { skipped: true, reason: 'no_remote_session' };
 
-  // 1) SUBIR
+  // 1) SUBIR (solo lo que cambió desde la última subida; sin cambios no se hace ninguna llamada)
   let pushError = null;
   let pushed = false;
-  try {
-    const snapshot = await repo.getSyncSnapshot();
-    await api('/sync/push', { method: 'POST', body: snapshot, token, timeout });
-    if (snapshot.profile) await repo.markProfileSynced(snapshot.profile.updated_at);
-    pushed = true;
-  } catch (e) {
-    if (OFFLINE.test(e.message || '')) throw e; // sin conexión: tampoco se puede bajar
-    pushError = e;                               // error del servidor: igual se intenta bajar
+  if (!pullOnly) {
+    try {
+      const startedAt = new Date().toISOString();
+      const lastFull = Number(Date.parse((await repo.getMeta('last_full_push_at')) || '')) || 0;
+      const full = Date.now() - lastFull > FULL_PUSH_EVERY_MS;
+      const since = full ? null : await repo.getMeta('last_push_at');
+      const snapshot = await repo.getSyncSnapshot(since);
+      const empty = !snapshot.profile && !snapshot.medications.length && !snapshot.doseLogs.length && !snapshot.doseEvents.length;
+      if (!empty) await api('/sync/push', { method: 'POST', body: snapshot, token, timeout });
+      if (snapshot.profile) await repo.markProfileSynced(snapshot.profile.updated_at);
+      await repo.setMeta('last_push_at', startedAt);
+      if (full) await repo.setMeta('last_full_push_at', startedAt);
+      pushed = !empty;
+    } catch (e) {
+      if (OFFLINE.test(e.message || '') || pushOnly) throw e; // sin conexión: tampoco se puede bajar
+      pushError = e;                                         // error del servidor: igual se intenta bajar
+    }
   }
+  if (pushOnly) return { pushed, changed: false };
 
   // 2) BAJAR (solo lo que cambió desde la última descarga)
   const since = await repo.getMeta('last_pull_at');
@@ -42,13 +56,14 @@ async function cycle(timeout) {
   return { pushed, pulled, changed };
 }
 
-export async function syncNow({ timeout = 90000 } = {}) {
+export async function syncNow(opts = {}) {
+  const { timeout = 90000, pullOnly = false, pushOnly = false } = opts;
   if (!hasBackend()) return { skipped: true, reason: 'backend_unavailable' };
   if (running) { rerun = true; return running; }
   running = (async () => {
-    let result = await cycle(timeout);
+    let result = await cycle({ timeout, pullOnly, pushOnly });
     // Hubo cambios mientras se sincronizaba: una vuelta más (máximo una) para no dejarlos para después.
-    if (rerun && !result.skipped) { rerun = false; const again = await cycle(timeout); result = { ...again, changed: result.changed || again.changed }; }
+    if (rerun && !result.skipped) { rerun = false; const again = await cycle({ timeout, pullOnly, pushOnly }); result = { ...again, changed: result.changed || again.changed }; }
     return result;
   })();
   try {

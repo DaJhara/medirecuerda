@@ -36,3 +36,10 @@ export async function api(path, { method = 'GET', body, timeout = 90000, token }
   }
   return data;
 }
+
+// Despierta el servidor (Render gratis se duerme tras unos minutos sin uso y la primera llamada tarda mucho).
+// Se llama al abrir la app, sin esperar la respuesta, para que ya esté listo cuando haga falta sincronizar.
+export function wakeServer() {
+  if (!API_URL) return;
+  fetch(`${API_URL}/health`).catch(() => {});
+}

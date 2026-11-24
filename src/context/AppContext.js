@@ -11,7 +11,7 @@ import { configureNotifications, ensurePermissions, ensureChannel, rescheduleAll
 import { findReferenceImage } from '../services/imageSearch';
 import * as auth from '../services/auth';
 import { syncNow } from '../services/sync';
-import { hasBackend } from '../services/api';
+import { hasBackend, wakeServer } from '../services/api';
 import { confirmAction } from '../utils/dialog';
 import { dayKey } from '../utils/time';
 
@@ -65,7 +65,11 @@ export function AppProvider({ children }) {
     setSession(user);
     // Primero se baja lo del servidor (fuente principal) con un tiempo máximo corto: así, en un teléfono nuevo
     // o reinstalado aparecen los datos de la cuenta antes de generar las tomas. Sin conexión se sigue con SQLite.
-    await doSync({ timeout: 8000 });
+    // Solo se espera la red si este teléfono nunca descargó los datos de la cuenta; si ya los tiene, la pantalla
+    // se muestra al instante desde SQLite y la sincronización corre en segundo plano.
+    if (hasBackend() && !(await repo.getMeta('last_pull_at')) && (await repo.getRemoteAuthToken())) {
+      await doSync({ timeout: 8000, pullOnly: true });
+    }
     setProfile(await repo.getProfile());
     await repo.ensureDoses();
     await repo.autoSkipExpired();
@@ -76,6 +80,7 @@ export function AppProvider({ children }) {
 
   // Carga inicial: abre la BD, recupera la sesión (si existe) y pide permisos.
   useEffect(() => {
+    wakeServer(); // despierta el servidor mientras se abre la base local
     (async () => {
       try {
         await getDb();
@@ -145,7 +150,7 @@ export function AppProvider({ children }) {
     // Antes de borrar la copia local se suben los últimos cambios. Si no hay conexión, se avisa
     // porque lo que no alcanzó a subirse se perdería.
     if (hasBackend() && (await repo.getRemoteAuthToken())) {
-      const r = await doSync({ timeout: 8000 });
+      const r = await doSync({ timeout: 8000, pushOnly: true }); // sin cambios pendientes no hay llamada de red
       if (!r || r.skipped) {
         const go = await confirmAction(
           'Sin conexión con el servidor',

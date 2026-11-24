@@ -8,7 +8,7 @@ WORKDIR /app
 
 # Instalar únicamente las dependencias de producción
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 # Copiar exclusivamente los archivos necesarios
 COPY migrations/ ./migrations/

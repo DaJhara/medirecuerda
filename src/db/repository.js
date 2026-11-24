@@ -540,12 +540,12 @@ async function createPasswordAccountImpl({ email, name, hash, salt }) {
 async function findAccountImpl(email) {
   const db = await getDb();
   const r = await db.getFirstAsync(
-    `SELECT u.id, u.auth_provider, c.password_hash, c.password_salt
+    `SELECT u.id, u.auth_provider, u.display_name, c.password_hash, c.password_salt
      FROM app_users u LEFT JOIN local_credentials c ON c.user_id = u.id
      WHERE lower(u.email) = ?`,
     [email.trim().toLowerCase()]
   );
-  return r ? { id: r.id, provider: r.auth_provider, hash: r.password_hash, salt: r.password_salt } : null;
+  return r ? { id: r.id, provider: r.auth_provider, name: r.display_name || '', hash: r.password_hash, salt: r.password_salt } : null;
 }
 
 // Cambia la contraseña local de un usuario (nuevo hash y sal). Si no tenía credencial local, la crea.
@@ -614,9 +614,100 @@ async function signInGoogleUserImpl({ sub, email, name, photoUrl }) {
   return mapUser(await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [id]));
 }
 
+
+// Vincula la identidad autenticada en Render con el usuario LOCAL de SQLite.
+// Conserva el ID local para no romper las FK de medicamentos, dosis e historial.
+async function linkRemoteAccountImpl({ user, token }) {
+  if (!user?.email || !token) throw new Error('La respuesta de autenticación del servidor está incompleta.');
+  const db = await getDb();
+  const mail = user.email.trim().toLowerCase();
+  let id;
+  await db.withTransactionAsync(async () => {
+    let local = await db.getFirstAsync('SELECT * FROM app_users WHERE lower(email) = ? ORDER BY created_at LIMIT 1', [mail]);
+    if (local) {
+      id = local.id;
+      await db.runAsync(
+        `UPDATE app_users SET
+           email = ?,
+           auth_provider = CASE WHEN auth_provider = 'local' THEN ? ELSE auth_provider END,
+           display_name = CASE WHEN display_name IS NULL OR display_name = '' THEN ? ELSE display_name END,
+           photo_url = CASE WHEN photo_url IS NULL OR photo_url = '' THEN ? ELSE photo_url END,
+           updated_at = ? WHERE id = ?`,
+        [mail, user.provider || 'password', user.name || '', user.photoUrl || null, iso(Date.now()), id]
+      );
+    } else {
+      id = await adoptOrCreateUser(db, {
+        email: mail, provider: user.provider || 'password', name: user.name || '', photoUrl: user.photoUrl || null,
+      });
+    }
+    await setCurrentUserId(db, id);
+    await db.runAsync("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('remote_auth_token', ?)", [token]);
+    await db.runAsync("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('remote_user_id', ?)", [String(user.id || '')]);
+  });
+  return mapUser(await db.getFirstAsync('SELECT * FROM app_users WHERE id = ?', [id]));
+}
+
+// Prepara una copia completa e idempotente de los datos del usuario actual.
+// Los IDs locales se conservan; el backend los asocia al usuario del JWT.
+async function getSyncSnapshotImpl() {
+  const db = await getDb();
+  const uid = await getCurrentUserId(db);
+  if (!uid) throw new Error('No hay una sesión local activa.');
+
+  const profileRow = await db.getFirstAsync(
+    `SELECT display_name, photo_url, age, height_cm, weight_kg, observations
+     FROM app_users WHERE id = ?`, [uid]
+  );
+  const medications = await db.getAllAsync(
+    `SELECT id, name, active_ingredient, dose, frequency_hours, start_at, duration_days,
+            notes, reference_image_url, reference_image_source, schedule_shift_ms,
+            active, created_at, updated_at, deleted_at
+     FROM medications WHERE user_id = ? ORDER BY created_at`, [uid]
+  );
+  const doseLogs = await db.getAllAsync(
+    `SELECT d.id, d.medication_id, d.scheduled_at, d.due_at, d.status, d.dose_taken,
+            d.action_at, d.on_time, d.snooze_count, d.postponed_to, d.auto_skipped,
+            d.created_at, d.updated_at
+     FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+     WHERE m.user_id = ? ORDER BY d.scheduled_at`, [uid]
+  );
+  const doseEvents = await db.getAllAsync(
+    `SELECT e.id, e.dose_log_id, e.medication_id, e.event_type, e.event_at,
+            e.scheduled_at, e.postponed_from, e.postponed_to, e.created_at
+     FROM dose_events e JOIN medications m ON m.id = e.medication_id
+     WHERE m.user_id = ? ORDER BY e.event_at`, [uid]
+  );
+
+  return {
+    profile: {
+      display_name: profileRow?.display_name || '',
+      photo_url: profileRow?.photo_url || null,
+      age: profileRow?.age ?? null,
+      height_cm: profileRow?.height_cm ?? null,
+      weight_kg: profileRow?.weight_kg ?? null,
+      observations: profileRow?.observations || '',
+    },
+    medications,
+    doseLogs,
+    doseEvents,
+  };
+}
+
+async function getRemoteAuthTokenImpl() {
+  const db = await getDb();
+  const row = await db.getFirstAsync("SELECT value FROM app_meta WHERE key = 'remote_auth_token'");
+  return row?.value || null;
+}
+
+async function clearRemoteAuthImpl() {
+  const db = await getDb();
+  await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id')");
+}
+
 async function signOutImpl() {
   const db = await getDb();
   await setCurrentUserId(db, null);
+  await db.runAsync("DELETE FROM app_meta WHERE key IN ('remote_auth_token', 'remote_user_id')");
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +761,10 @@ export const getHistoryDay = (key) => serial(() => getHistoryDayImpl(key));
 export const getSessionUser = () => serial(getSessionUserImpl);
 export const createPasswordAccount = (d) => serial(() => createPasswordAccountImpl(d));
 export const findAccount = (email) => serial(() => findAccountImpl(email));
+export const linkRemoteAccount = (data) => serial(() => linkRemoteAccountImpl(data));
+export const getRemoteAuthToken = () => serial(getRemoteAuthTokenImpl);
+export const getSyncSnapshot = () => serial(getSyncSnapshotImpl);
+export const clearRemoteAuth = () => serial(clearRemoteAuthImpl);
 export const setPassword = (id, hash, salt) => serial(() => setPasswordImpl(id, hash, salt));
 export const purgeFinishedMeds = () => serial(purgeFinishedImpl);
 export const startSession = (id) => serial(() => startSessionImpl(id));

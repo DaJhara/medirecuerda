@@ -42,6 +42,16 @@ router.post('/push', async (req, res, next) => {
   const client = await getPool().connect();
   try {
     await client.query('BEGIN');
+    const profile = req.body?.profile;
+    if (profile && typeof profile === 'object') {
+      await client.query(
+        `UPDATE app_users SET display_name=$2, photo_url=$3, age=$4, height_cm=$5,
+           weight_kg=$6, observations=$7, updated_at=now() WHERE id=$1`,
+        [req.user.id, profile.display_name || '', profile.photo_url || null,
+          profile.age ?? null, profile.height_cm ?? null, profile.weight_kg ?? null,
+          profile.observations || '']
+      );
+    }
     let medsSaved = 0;
     let logsSaved = 0;
     let eventsSaved = 0;
@@ -119,7 +129,7 @@ router.post('/push', async (req, res, next) => {
     }
 
     await client.query('COMMIT');
-    res.json({ ok: true, saved: { medications: medsSaved, doseLogs: logsSaved, doseEvents: eventsSaved } });
+    res.json({ ok: true, saved: { profile: !!profile, medications: medsSaved, doseLogs: logsSaved, doseEvents: eventsSaved } });
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     next(e);

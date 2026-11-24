@@ -10,6 +10,7 @@ import { getDb } from '../db/database';
 import { configureNotifications, ensurePermissions, ensureChannel, rescheduleAll } from '../services/notifications';
 import { findReferenceImage } from '../services/imageSearch';
 import * as auth from '../services/auth';
+import { syncNow } from '../services/sync';
 import { dayKey } from '../utils/time';
 
 configureNotifications();
@@ -48,6 +49,7 @@ export function AppProvider({ children }) {
     await repo.autoSkipExpired();
     await repo.purgeFinishedMeds(); // quita los tratamientos cuya duración ya terminó
     await refresh();
+    syncNow().catch((e) => console.warn('No se pudo sincronizar con el servidor; los datos siguen guardados en el teléfono:', e.message));
   }, [refresh]);
 
   // Carga inicial: abre la BD, recupera la sesión (si existe) y pide permisos.
@@ -94,7 +96,12 @@ export function AppProvider({ children }) {
 
   useEffect(() => {
     const timer = setInterval(tick, 5000);
-    const sub = AppState.addEventListener('change', (s) => s === 'active' && tick());
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') {
+        tick();
+        if (sessionRef.current) syncNow().catch((e) => console.warn('Error sincronizando al volver a la app:', e.message));
+      }
+    });
     return () => {
       clearInterval(timer);
       sub.remove();
@@ -124,6 +131,7 @@ export function AppProvider({ children }) {
   const saveProfile = useCallback(async (p) => {
     await repo.saveProfile(p);
     setProfile(await repo.getProfile());
+    syncNow().catch((e) => console.warn('No se pudo sincronizar el perfil:', e.message));
   }, []);
 
   // ---- Ajustes de sonido y vibración: se guardan, se crea el canal y se reprograman los avisos ----
@@ -140,6 +148,7 @@ export function AppProvider({ children }) {
   const act = (fn) => async (id) => {
     const res = await fn(id);
     await refresh();
+    syncNow().catch((e) => console.warn('No se pudo sincronizar la toma:', e.message));
     return res;
   };
   const takeDose = useCallback(act(repo.takeDose), [refresh]);
@@ -153,6 +162,7 @@ export function AppProvider({ children }) {
     if (img) {
       await repo.updateMedicationImage(med.id, { imageUrl: img.url, imageSource: img.source });
       await refresh();
+      syncNow().catch((e) => console.warn('No se pudo sincronizar la imagen del medicamento:', e.message));
     }
     return img;
   }, [refresh]);
@@ -161,6 +171,7 @@ export function AppProvider({ children }) {
   const saveMed = useCallback(async (data) => {
     const id = await repo.saveMedication(data);
     await refresh();
+    syncNow().catch((e) => console.warn('No se pudo sincronizar el medicamento:', e.message));
     // Si no tiene imagen, se busca en segundo plano (no hace esperar al usuario).
     if (!data.imageUrl) {
       findReferenceImage({ name: data.name, activeIngredient: data.activeIngredient })
@@ -168,6 +179,7 @@ export function AppProvider({ children }) {
           if (img) {
             await repo.updateMedicationImage(id, { imageUrl: img.url, imageSource: img.source });
             await refresh();
+            syncNow().catch((e) => console.warn('No se pudo sincronizar la imagen del medicamento:', e.message));
           }
         })
         .catch(() => {});
@@ -178,11 +190,13 @@ export function AppProvider({ children }) {
   const saveMany = useCallback(async (arr) => {
     for (const m of arr) await repo.saveMedication(m);
     await refresh();
+    syncNow().catch((e) => console.warn('No se pudieron sincronizar los medicamentos:', e.message));
   }, [refresh]);
 
   const deleteMed = useCallback(async (id) => {
     await repo.deleteMedication(id);
     await refresh();
+    syncNow().catch((e) => console.warn('No se pudo sincronizar la eliminación:', e.message));
   }, [refresh]);
 
   const toggleActive = useCallback(async (id) => {
@@ -190,6 +204,7 @@ export function AppProvider({ children }) {
     if (!med) return;
     await repo.setMedicationActive(id, !med.active);
     await refresh();
+    syncNow().catch((e) => console.warn('No se pudo sincronizar el cambio de estado:', e.message));
   }, [meds, refresh]);
 
   const value = {

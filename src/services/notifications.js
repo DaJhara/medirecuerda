@@ -14,16 +14,45 @@ export const channelIdFor = (settings) =>
 const channelName = (settings) =>
   `Recordatorios de medicamentos (${settings.sound ? 'con sonido' : 'sin sonido'}, ${settings.vibrate ? 'con vibración' : 'sin vibración'})`;
 
+// Canales ya creados en esta sesión (crear el mismo canal otra vez es innecesario).
+const createdChannels = new Set();
+
 // Crea (o reutiliza) el canal de Android que corresponde a los ajustes actuales.
+// Algunas versiones del módulo nativo fallan con NullPointerException si se pasan ciertos valores en
+// blanco (sound: null, vibrationPattern [0]). Por eso se intenta de lo más completo a lo más simple y
+// NUNCA se lanza el error: lo peor que pasa es que el canal use el sonido/vibración por defecto del sistema.
+// Devuelve el id del canal que quedó creado, o null si ninguno se pudo crear.
 export async function ensureChannel(settings) {
-  if (Platform.OS !== 'android') return;
-  await Notifications.setNotificationChannelAsync(channelIdFor(settings), {
-    name: channelName(settings),
-    importance: Notifications.AndroidImportance.MAX,
-    sound: settings.sound ? 'default' : null,
-    enableVibrate: settings.vibrate,
-    vibrationPattern: settings.vibrate ? [0, 500, 250, 500] : [0],
-  });
+  if (Platform.OS !== 'android') return null;
+  const id = channelIdFor(settings);
+  if (createdChannels.has(id)) return id;
+
+  const name = channelName(settings);
+  const attempts = [
+    // 1) Configuración completa; sin valores null ni patrones vacíos.
+    {
+      name,
+      importance: settings.sound ? Notifications.AndroidImportance.MAX : Notifications.AndroidImportance.LOW,
+      enableVibrate: settings.vibrate,
+      ...(settings.sound ? { sound: 'default' } : {}),
+      ...(settings.vibrate ? { vibrationPattern: [0, 500, 250, 500] } : {}),
+    },
+    // 2) Sin sonido ni patrón personalizados.
+    { name, importance: settings.sound ? Notifications.AndroidImportance.MAX : Notifications.AndroidImportance.LOW, enableVibrate: settings.vibrate },
+    // 3) Lo mínimo posible.
+    { name, importance: Notifications.AndroidImportance.DEFAULT },
+  ];
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      await Notifications.setNotificationChannelAsync(id, attempts[i]);
+      if (i > 0) console.warn(`Canal "${id}" creado con configuración simplificada (intento ${i + 1}).`);
+      createdChannels.add(id);
+      return id;
+    } catch (e) {
+      console.warn(`No se pudo crear el canal "${id}" (intento ${i + 1}/${attempts.length}):`, e.message);
+    }
+  }
+  return null;
 }
 
 // iOS permite como máximo 64 notificaciones programadas; dejamos margen.

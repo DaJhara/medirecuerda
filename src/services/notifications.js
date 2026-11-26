@@ -32,9 +32,9 @@ let legacyCleaned = false;
 async function removeLegacyChannels() {
   if (legacyCleaned) return;
   legacyCleaned = true;
-  for (const id of LEGACY_CHANNELS) {
+  await Promise.all(LEGACY_CHANNELS.map(async (id) => {
     try { await Notifications.deleteNotificationChannelAsync(id); } catch { /* no existía */ }
-  }
+  }));
 }
 
 // Crea (o reutiliza) el canal de Android que corresponde a los ajustes actuales.
@@ -155,7 +155,8 @@ async function drain() {
       const args = nextArgs;
       nextArgs = null;
       try {
-        await rescheduleNow(args);
+        // Una reprogramación a la vez: la siguiente solo empieza cuando termina la anterior.
+        await rescheduleNow(args); // NOSONAR: secuencial a propósito
       } catch (e) {
         console.warn('No se pudieron reprogramar los recordatorios:', e.message);
       }
@@ -163,6 +164,26 @@ async function drain() {
   } finally {
     running = null;
   }
+}
+
+// Programa el aviso de una toma (identificador fijo: si se repite, reemplaza al anterior y no se duplica).
+function scheduleDose(d, settings) {
+  const notesSuffix = d.notes ? ` · ${d.notes}` : '';
+  return Notifications.scheduleNotificationAsync({
+    identifier: `dose-${d.id}-${d.dueAt}`,
+    content: {
+      title: d.snoozeCount > 0 ? 'Recordatorio aplazado' : 'Hora de tu medicamento',
+      body: `${d.name} · ${d.dose}${notesSuffix} (${fmtTime(d.dueAt)})`,
+      sound: settings.sound ? 'default' : false,
+      vibrate: settings.vibrate ? VIBRATION : undefined, // Android antiguo (antes de los canales)
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: new Date(d.dueAt),
+      channelId: channelIdFor(settings),
+      ...(Platform.OS === 'android' ? { delivery: 'alarmClock' } : {}),
+    },
+  });
 }
 
 async function rescheduleNow({ upcoming, settings, meds }) {
@@ -174,54 +195,39 @@ async function rescheduleNow({ upcoming, settings, meds }) {
     .sort((a, b) => a.dueAt - b.dueAt)
     .slice(0, MAX_SCHEDULED);
 
-  for (const d of list) {
-    const notesSuffix = d.notes ? ` · ${d.notes}` : '';
-    await Notifications.scheduleNotificationAsync({
-      identifier: `dose-${d.id}-${d.dueAt}`,
-      content: {
-        title: d.snoozeCount > 0 ? 'Recordatorio aplazado' : 'Hora de tu medicamento',
-        body: `${d.name} · ${d.dose}${notesSuffix} (${fmtTime(d.dueAt)})`,
-        sound: settings.sound ? 'default' : false,
-        vibrate: settings.vibrate ? VIBRATION : undefined, // Android antiguo (antes de los canales)
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: new Date(d.dueAt),
-        channelId: channelIdFor(settings),
-        ...(Platform.OS === 'android'
-          ? { delivery: 'alarmClock' }
-          : {}),
-      },
-    });
-  }
+  // Las programaciones son independientes entre sí: se lanzan juntas.
+  await Promise.all(list.map((d) => scheduleDose(d, settings)));
   await scheduleRefillNotices(meds, settings, now);
 }
 
 // Aviso de resurtir: el primer día que faltan REFILL_DAYS días o menos (a las 9:00). Si ya faltan menos, se
 // avisa en la próxima mañana. Cada vez que se reprograma se recalcula con el stock actual.
 const REFILL_HOUR = 9;
+// Programa el aviso de resurtir de un medicamento; devuelve null si no hace falta ninguno.
+function scheduleRefill(m, settings, now) {
+  const info = refillInfo(m, now);
+  if (!info) return null;
+  const at = new Date(Math.max(info.alertAt, now));
+  at.setHours(REFILL_HOUR, 0, 0, 0);
+  if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+  if (info.endsAt != null && at.getTime() >= info.endsAt) return null; // el tratamiento ya habrá terminado
+  return Notifications.scheduleNotificationAsync({
+    identifier: `refill-${m.id}`,
+    content: {
+      title: info.reason === 'stock' ? 'Hora de resurtir' : 'Tu tratamiento está por terminar',
+      body: info.message,
+      sound: settings.sound ? 'default' : false,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: at,
+      channelId: channelIdFor(settings),
+    },
+  });
+}
+
 async function scheduleRefillNotices(meds, settings, now) {
-  for (const m of meds) {
-    const info = refillInfo(m, now);
-    if (!info) continue;
-    const at = new Date(Math.max(info.alertAt, now));
-    at.setHours(REFILL_HOUR, 0, 0, 0);
-    if (at.getTime() <= now) at.setDate(at.getDate() + 1);
-    if (info.endsAt != null && at.getTime() >= info.endsAt) continue; // el tratamiento ya habrá terminado
-    await Notifications.scheduleNotificationAsync({
-      identifier: `refill-${m.id}`,
-      content: {
-        title: info.reason === 'stock' ? 'Hora de resurtir' : 'Tu tratamiento está por terminar',
-        body: info.message,
-        sound: settings.sound ? 'default' : false,
-      },
-      trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
-        date: at,
-        channelId: channelIdFor(settings),
-      },
-    });
-  }
+  await Promise.all(meds.map((m) => scheduleRefill(m, settings, now)));
 }
 
 // Abre los ajustes del sistema del canal para ELEGIR UN TONO del celular.

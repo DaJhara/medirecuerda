@@ -197,10 +197,12 @@ router.get('/me', requireUser, async (req, res, next) => {
 // 1) Se envía al correo registrado el historial completo (resumen en el cuerpo y el detalle en un CSV adjunto).
 // 2) Solo si el correo salió bien, se borra el usuario; sus medicamentos, tomas y eventos se borran en cascada.
 // Si el correo falla, NO se borra nada: así el usuario no pierde su historial.
-const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+const csvCell = (v) => `"${String(v ?? '').replaceAll('"', '""')}"`;
 const fmtLocal = (d) => (d ? new Date(d).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: false }) : '');
 const STATUS_ES = { taken: 'Tomada', skipped: 'Omitida', pending: 'Sin respuesta' };
-const escHtml = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escHtml = (v) => String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+// "A tiempo" puede ser nulo (toma sin registrar): se muestra vacío.
+const yesNo = (v) => (v == null ? '' : (v ? 'Sí' : 'No'));
 
 async function buildHistoryExport(userId) {
   const meds = (await query(
@@ -215,7 +217,7 @@ async function buildHistoryExport(userId) {
   const header = ['Medicamento', 'Dosis', 'Fecha y hora prevista', 'Estado', 'Hora de registro', 'A tiempo', 'Aplazos', 'Omitida automáticamente'];
   const lines = doses.map((d) => [
     d.name, d.dose, fmtLocal(d.scheduled_at), STATUS_ES[d.status] || d.status, fmtLocal(d.action_at),
-    d.on_time == null ? '' : (d.on_time ? 'Sí' : 'No'), d.snooze_count || 0, d.auto_skipped ? 'Sí' : 'No',
+    yesNo(d.on_time), d.snooze_count || 0, d.auto_skipped ? 'Sí' : 'No',
   ].map(csvCell).join(','));
   // BOM para que Excel abra bien los acentos.
   const csv = `\uFEFF${header.map(csvCell).join(',')}\n${lines.join('\n')}\n`;

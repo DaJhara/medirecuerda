@@ -72,7 +72,8 @@ function buildWeeks(year, month) {
     const dd = String(day).padStart(2, '0');
     cells.push({ id: `${year}-${mm}-${dd}`, key: `${year}-${mm}-${dd}`, day });
   }
-  for (let n = 0; cells.length % 7 !== 0; n++) cells.push({ id: `${year}-${mm}-post${n}`, day: null });
+  const trailing = (7 - (cells.length % 7)) % 7; // celdas vacías para completar la última semana
+  for (let n = 0; n < trailing; n++) cells.push({ id: `${year}-${mm}-post${n}`, day: null });
   const weeks = [];
   for (let i = 0; i < cells.length; i += 7) weeks.push({ id: cells[i].id, cells: cells.slice(i, i + 7) });
   return weeks;

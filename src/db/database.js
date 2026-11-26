@@ -53,8 +53,9 @@ async function migrateSchema(db) {
     ['google_sub', 'TEXT'],
     ['photo_url', 'TEXT'],
   ];
-  for (const [name, type] of wanted) {
-    if (!cols.includes(name)) await db.execAsync(`ALTER TABLE app_users ADD COLUMN ${name} ${type}`);
+  const missing = wanted.filter(([name]) => !cols.includes(name));
+  if (missing.length > 0) {
+    await db.execAsync(missing.map(([name, type]) => `ALTER TABLE app_users ADD COLUMN ${name} ${type};`).join('\n'));
   }
   await migrateMedications(db);
 }
@@ -68,8 +69,9 @@ async function migrateMedications(db) {
     ['stock_units', 'INTEGER CHECK (stock_units IS NULL OR stock_units >= 0)'],
     ['units_per_dose', 'INTEGER NOT NULL DEFAULT 1 CHECK (units_per_dose BETWEEN 1 AND 100)'],
   ];
-  for (const [name, type] of wanted) {
-    if (!medCols.includes(name)) await db.execAsync(`ALTER TABLE medications ADD COLUMN ${name} ${type}`);
+  const missing = wanted.filter(([name]) => !medCols.includes(name));
+  if (missing.length > 0) {
+    await db.execAsync(missing.map(([name, type]) => `ALTER TABLE medications ADD COLUMN ${name} ${type};`).join('\n'));
   }
 }
 
@@ -108,16 +110,17 @@ async function migrateLegacy(db) {
     const list = raw ? JSON.parse(raw) : [];
     const userId = await getLocalUserId(db);
     const now = iso(Date.now());
-    for (const m of list) {
-      if (!m?.name || !m?.startAt) continue;
-      await db.runAsync(
-        `INSERT INTO medications
-           (id, user_id, name, dose, frequency_hours, start_at, duration_days, notes, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [uuid(), userId, m.name, m.dose || 'Según orden médica', m.intervalHours || 8, m.startAt,
-         m.durationDays || null, m.notes || '', m.active === false ? 0 : 1, now, now]
-      );
-    }
+    await Promise.all(
+      list
+        .filter((m) => m?.name && m?.startAt)
+        .map((m) => db.runAsync(
+          `INSERT INTO medications
+             (id, user_id, name, dose, frequency_hours, start_at, duration_days, notes, active, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [uuid(), userId, m.name, m.dose || 'Según orden médica', m.intervalHours || 8, m.startAt,
+           m.durationDays || null, m.notes || '', m.active === false ? 0 : 1, now, now]
+        ))
+    );
   } catch (e) {
     console.warn('No se pudo migrar el almacenamiento anterior:', e);
   }

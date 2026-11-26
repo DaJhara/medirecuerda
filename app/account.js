@@ -18,11 +18,16 @@ export default function AccountScreen() {
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    getAccountInfo().then(setInfo).catch(() => {});
-    // La fecha de creación sale del servidor; si cambió respecto a la guardada, se vuelve a leer.
-    refreshAccountCreatedAt().then((changed) => {
-      if (changed) getAccountInfo().then(setInfo).catch(() => {});
-    });
+    const load = async () => {
+      try {
+        setInfo(await getAccountInfo());
+        // La fecha de creación sale del servidor; si cambió respecto a la guardada, se vuelve a leer.
+        if (await refreshAccountCreatedAt()) setInfo(await getAccountInfo());
+      } catch {
+        /* sin conexión o sin datos: la pantalla conserva lo que ya mostró */
+      }
+    };
+    void load();
   }, []);
 
   const onDelete = async () => {

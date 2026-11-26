@@ -6,7 +6,7 @@ import { getHistoryRange } from '../db/repository';
 import { fmtTime } from './schedule';
 
 const DAY = 24 * 3600000;
-const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const esc = (v) => String(v ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const fmtDay = (ms) => new Date(ms).toLocaleDateString('es-CO', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 
 // Texto del estado de una toma para la tabla.

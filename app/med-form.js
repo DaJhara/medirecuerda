@@ -12,14 +12,26 @@ import { useApp } from '../src/context/AppContext';
 
 const INTERVALS = [4, 6, 8, 12, 24];
 // Presentación del medicamento (opcional). "Otra" permite escribirla.
-const PRESENTATIONS = ['Tabletas', 'Cápsulas', 'Gotas', 'Jarabe', 'Inyección', 'Crema o pomada', 'Inhalador', 'Sobres'];
+const PRESENTATIONS = new Set(['Tabletas', 'Cápsulas', 'Gotas', 'Jarabe', 'Inyección', 'Crema o pomada', 'Inhalador', 'Sobres']);
 const OTHER = 'Otra';
+
+// Chip que corresponde a la presentación guardada: una de la lista, "Otra" si es un texto propio, o nada.
+function chipFor(saved) {
+  if (PRESENTATIONS.has(saved)) return saved;
+  return saved ? OTHER : '';
+}
+
+// "menos de 1 día", "unos 1 día", "unos 5 días".
+function daysText(days) {
+  if (days < 1) return 'menos de 1 día';
+  return days === 1 ? 'unos 1 día' : `unos ${days} días`;
+}
 
 // Texto de ayuda del stock: cuánto alcanza y si faltan unidades para todo el tratamiento.
 function stockHint(plan) {
   if (!plan) return null;
   const days = Math.floor(plan.daysCovered);
-  const base = `Con esas unidades alcanzas para ${days < 1 ? 'menos de 1 día' : `unos ${days} día${days === 1 ? '' : 's'}`}.`;
+  const base = `Con esas unidades alcanzas para ${daysText(days)}.`;
   if (plan.shortfall > 0) return { warn: true, text: `${base} Tu tratamiento dura ${plan.daysTreatment} días: te faltarían ${plan.shortfall} unidades.` };
   return { warn: false, text: `${base} Te avisaremos 2 días antes de que se acaben.` };
 }
@@ -44,8 +56,8 @@ export default function MedFormScreen() {
   const [notes, setNotes] = useState(med?.notes || '');
   // Presentación (opcional): una opción de la lista, o "Otra" con texto propio.
   const savedPres = med?.presentation || '';
-  const [presChip, setPresChip] = useState(PRESENTATIONS.includes(savedPres) ? savedPres : (savedPres ? OTHER : ''));
-  const [presOther, setPresOther] = useState(PRESENTATIONS.includes(savedPres) ? '' : savedPres);
+  const [presChip, setPresChip] = useState(chipFor(savedPres));
+  const [presOther, setPresOther] = useState(PRESENTATIONS.has(savedPres) ? '' : savedPres);
   // Stock (opcional): unidades que hay y unidades que se gastan en cada toma.
   const [stock, setStock] = useState(med?.stockUnits != null ? String(med.stockUnits) : '');
   const [unitsPerDose, setUnitsPerDose] = useState(String(med?.unitsPerDose || 1));

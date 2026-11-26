@@ -14,7 +14,8 @@ const fail = (code, message) => Object.assign(new Error(message), { code });
 async function hashPassword(password, salt) {
   let h = `${salt}:${password}`;
   for (let i = 0; i < ROUNDS; i++) {
-    h = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${salt}:${h}`);
+    // Cada ronda necesita el resultado de la anterior: no se puede paralelizar.
+    h = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${salt}:${h}`); // NOSONAR
   }
   return h;
 }

@@ -98,15 +98,15 @@ async function generateForMed(db, med, fromMs) {
   const shift = med.schedule_shift_ms || 0;
   const k0 = Math.max(0, Math.ceil((fromMs - start) / step));
   const stamp = iso(Date.now());
-  for (let t = start + k0 * step; t <= horizon && t < end; t += step) {
-    // OR IGNORE: si la toma ya existe (misma hora planeada) no se duplica.
-    await db.runAsync(
-      `INSERT OR IGNORE INTO dose_logs
-         (id, medication_id, scheduled_at, due_at, status, snooze_count, auto_skipped, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'pending', 0, 0, ?, ?)`,
-      [uuid(), med.id, iso(t), iso(t + shift), stamp, stamp]
-    );
-  }
+  const times = [];
+  for (let t = start + k0 * step; t <= horizon && t < end; t += step) times.push(t);
+  // OR IGNORE: si la toma ya existe (misma hora planeada) no se duplica.
+  await Promise.all(times.map((t) => db.runAsync(
+    `INSERT OR IGNORE INTO dose_logs
+       (id, medication_id, scheduled_at, due_at, status, snooze_count, auto_skipped, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'pending', 0, 0, ?, ?)`,
+    [uuid(), med.id, iso(t), iso(t + shift), stamp, stamp]
+  )));
 }
 
 async function ensureDosesImpl() {
@@ -115,7 +115,7 @@ async function ensureDosesImpl() {
   if (!uid) return;
   const meds = await db.getAllAsync('SELECT * FROM medications WHERE active = 1 AND deleted_at IS NULL AND user_id = ?', [uid]);
   await db.withTransactionAsync(async () => {
-    for (const m of meds) await generateForMed(db, m, startOfDay(Date.now()));
+    await Promise.all(meds.map((m) => generateForMed(db, m, startOfDay(Date.now()))));
   });
 }
 
@@ -322,10 +322,8 @@ async function snoozeDoseImpl(id) {
       `SELECT id, due_at FROM dose_logs WHERE medication_id=? AND status='pending' AND scheduled_at > ? AND id <> ?`,
       [row.medication_id, row.scheduled_at, id]
     );
-    for (const f of future) {
-      await db.runAsync('UPDATE dose_logs SET due_at=?, updated_at=? WHERE id=?',
-        [iso(Date.parse(f.due_at) + delta), iso(now), f.id]);
-    }
+    await Promise.all(future.map((f) => db.runAsync('UPDATE dose_logs SET due_at=?, updated_at=? WHERE id=?',
+      [iso(Date.parse(f.due_at) + delta), iso(now), f.id])));
     // El desplazamiento se acumula para las tomas que se generen después.
     await db.runAsync(
       'UPDATE medications SET schedule_shift_ms = schedule_shift_ms + ?, updated_at=? WHERE id=?',
@@ -359,6 +357,17 @@ async function undoDoseImpl(id) {
   return { ok: true };
 }
 
+// Marca una toma vencida como omitida automática y deja el evento en la bitácora.
+async function autoSkipRow(db, r) {
+  // La hora registrada es la del vencimiento (due + 10 min), aunque la app se haya enterado tarde.
+  const at = Date.parse(r.due_at) + AUTO_SKIP_MINUTES * MIN;
+  await db.runAsync(
+    `UPDATE dose_logs SET status='skipped', auto_skipped=1, action_at=?, on_time=NULL, updated_at=? WHERE id=?`,
+    [iso(at), iso(Date.now()), r.id]
+  );
+  await addEvent(db, { doseId: r.id, medId: r.medication_id, type: 'auto_skipped', at, scheduledAt: r.scheduled_at });
+}
+
 // Tercer momento: la toma ya se aplazó 2 veces y pasaron 10 min sin marcarla -> Omitida automática.
 async function autoSkipExpiredImpl() {
   const db = await getDb();
@@ -369,15 +378,7 @@ async function autoSkipExpiredImpl() {
   );
   if (rows.length === 0) return 0;
   await db.withTransactionAsync(async () => {
-    for (const r of rows) {
-      // La hora registrada es la del vencimiento (due + 10 min), aunque la app se haya enterado tarde.
-      const at = Date.parse(r.due_at) + AUTO_SKIP_MINUTES * MIN;
-      await db.runAsync(
-        `UPDATE dose_logs SET status='skipped', auto_skipped=1, action_at=?, on_time=NULL, updated_at=? WHERE id=?`,
-        [iso(at), iso(Date.now()), r.id]
-      );
-      await addEvent(db, { doseId: r.id, medId: r.medication_id, type: 'auto_skipped', at, scheduledAt: r.scheduled_at });
-    }
+    await Promise.all(rows.map((r) => autoSkipRow(db, r)));
   });
   return rows.length;
 }
@@ -599,17 +600,18 @@ async function purgeFinishedImpl() {
   const nowMs = Date.now();
   const rows = await db.getAllAsync(
     'SELECT id, name, start_at, duration_days FROM medications WHERE deleted_at IS NULL AND duration_days IS NOT NULL AND user_id = ?', [uid]);
-  const done = [];
-  for (const m of rows) {
-    if (Date.parse(m.start_at) + m.duration_days * DAY > nowMs) continue; // aún dentro del tratamiento
+  const stamp = iso(nowMs);
+  // Cada tratamiento terminado se revisa por separado; devuelve su nombre si se eliminó, o null si se conserva.
+  const purgeOne = async (m) => {
     const open = await db.getFirstAsync(
-      `SELECT COUNT(*) AS c FROM dose_logs WHERE medication_id = ? AND status = 'pending' AND due_at > ?`, [m.id, iso(nowMs)]);
-    if (open.c > 0) continue; // queda una toma por responder o aplazada
-    const stamp = iso(nowMs);
+      `SELECT COUNT(*) AS c FROM dose_logs WHERE medication_id = ? AND status = 'pending' AND due_at > ?`, [m.id, stamp]);
+    if (open.c > 0) return null; // queda una toma por responder o aplazada
     await db.runAsync('UPDATE medications SET deleted_at = ?, active = 0, updated_at = ? WHERE id = ?', [stamp, stamp, m.id]);
-    done.push(m.name);
-  }
-  return done;
+    return m.name;
+  };
+  const finished = rows.filter((m) => Date.parse(m.start_at) + m.duration_days * DAY <= nowMs); // ya pasó la fecha final
+  const names = await Promise.all(finished.map(purgeOne));
+  return names.filter(Boolean);
 }
 
 async function startSessionImpl(userId) {

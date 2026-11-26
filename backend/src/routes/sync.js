@@ -31,8 +31,8 @@ router.get('/status', async (req, res, next) => {
 });
 
 const invalid = (message) => Object.assign(new Error(message), { status: 400 });
-const DOSE_STATUS = ['pending', 'taken', 'skipped'];
-const EVENT_TYPES = ['snoozed', 'taken', 'skipped', 'auto_skipped', 'undone'];
+const DOSE_STATUS = new Set(['pending', 'taken', 'skipped']);
+const EVENT_TYPES = new Set(['snoozed', 'taken', 'skipped', 'auto_skipped', 'undone']);
 
 // ---- Validaciones de cada fila del lote ----
 function checkMedication(m) {
@@ -43,11 +43,11 @@ function checkMedication(m) {
   if (!ok || !stockOk || !unitsOk) throw invalid('Hay un medicamento con datos obligatorios no válidos.');
 }
 function checkDose(d) {
-  const ok = validId(d.medication_id) && d.scheduled_at && d.due_at && DOSE_STATUS.includes(d.status);
+  const ok = validId(d.medication_id) && d.scheduled_at && d.due_at && DOSE_STATUS.has(d.status);
   if (!ok) throw invalid('Hay un registro de toma con datos no válidos.');
 }
 function checkEvent(e) {
-  const ok = validId(e.dose_log_id) && validId(e.medication_id) && EVENT_TYPES.includes(e.event_type) && e.event_at && e.scheduled_at;
+  const ok = validId(e.dose_log_id) && validId(e.medication_id) && EVENT_TYPES.has(e.event_type) && e.event_at && e.scheduled_at;
   if (!ok) throw invalid('Hay un evento de historial con datos no válidos.');
 }
 

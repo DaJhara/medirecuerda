@@ -250,7 +250,8 @@ export function AppProvider({ children }) {
   }, [refresh, doSync]);
 
   const saveMany = useCallback(async (arr) => {
-    for (const m of arr) await repo.saveMedication(m);
+    // La cola del repositorio ejecuta los guardados uno por uno y en el mismo orden.
+    await Promise.all(arr.map((m) => repo.saveMedication(m)));
     await refresh();
     doSync();
   }, [refresh, doSync]);

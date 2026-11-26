@@ -2,7 +2,8 @@
 // - Se abre con el botón de hamburguesa del encabezado o deslizando desde el borde izquierdo (ver DrawerEdgeSwipe).
 // - Se cierra tocando fuera del panel, deslizándolo a la izquierda o con el botón "atrás" de Android.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Dimensions, Modal, PanResponder, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
+import { Text } from './AppText';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

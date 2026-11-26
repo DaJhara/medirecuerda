@@ -28,7 +28,7 @@ export function AppProvider({ children }) {
   const [session, setSession] = useState(null); // usuario con la sesión iniciada (null = sin sesión)
   const sessionRef = useRef(null);
   const [profile, setProfile] = useState(EMPTY_PROFILE);
-  const [settings, setSettings] = useState({ sound: true, vibrate: true });
+  const [settings, setSettings] = useState({ sound: true, vibrate: true, fontScale: 1 });
   const settingsRef = useRef(settings); // copia para usarla dentro de callbacks sin quedar desactualizada
   const [ready, setReady] = useState(false);
   const readyRef = useRef(false);
@@ -39,7 +39,7 @@ export function AppProvider({ children }) {
     const [m, t, upcoming] = await Promise.all([repo.listMeds(), repo.getTodayDoses(), repo.getUpcomingDoses(60)]);
     setMeds(m);
     setTodayDoses(t);
-    rescheduleAll(upcoming, settingsRef.current).catch((e) => console.warn('Error reprogramando notificaciones:', e));
+    rescheduleAll(upcoming, settingsRef.current, m).catch((e) => console.warn('Error reprogramando notificaciones:', e));
   }, []);
 
   // Sincroniza con el servidor (sube y baja). Si bajó algo nuevo, vuelve a leer SQLite y refresca las pantallas.

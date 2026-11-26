@@ -6,12 +6,14 @@
 // - Se bloquean hasta que llega la hora (también tras cada aplazamiento).
 // - Máximo 2 aplazamientos; en el tercer momento, si no se marca, se omite sola a los 10 min.
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Alert, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { View, ScrollView, StyleSheet, Alert, TouchableOpacity, Image, ActivityIndicator } from 'react-native';
+import { Text } from '../../src/components/AppText';
 import { Ionicons } from '@expo/vector-icons';
 import { Header, Card, Button, Badge } from '../../src/components/UI';
 import { colors, font } from '../../src/theme';
 import { fmtTime } from '../../src/services/schedule';
 import { useApp } from '../../src/context/AppContext';
+import { refillInfo, needsRefillNow } from '../../src/services/refill';
 import { MAX_SNOOZES, AUTO_SKIP_MINUTES, ON_TIME_TOLERANCE_MIN, SNOOZE_MINUTES } from '../../src/db/repository';
 
 const MIN = 60000;
@@ -33,7 +35,7 @@ function groupByMed(doses) {
 }
 
 export default function TodayScreen() {
-  const { todayDoses, takeDose, skipDose, snoozeDose, undoDose, fetchImage } = useApp();
+  const { meds, todayDoses, takeDose, skipDose, snoozeDose, undoDose, fetchImage } = useApp();
 
   // "now" se actualiza cada segundo: así los botones se habilitan justo a la hora.
   const [now, setNow] = useState(Date.now());
@@ -47,6 +49,8 @@ export default function TodayScreen() {
 
   const groups = useMemo(() => groupByMed(todayDoses), [todayDoses]);
   const done = todayDoses.filter((d) => d.status === 'taken').length;
+  // Medicamentos a los que les quedan 2 días o menos de stock, o que están por terminar el tratamiento.
+  const refills = useMemo(() => meds.map((m) => refillInfo(m)).filter((i) => needsRefillNow(i)), [meds]);
 
   const dateLabel = new Date(now).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -94,6 +98,15 @@ export default function TodayScreen() {
             <Text style={s.summary}>{done} de {todayDoses.length} tomas realizadas</Text>
           </Card>
         )}
+
+        {refills.map((r) => (
+          <Card key={r.message} style={{ backgroundColor: colors.warnBg, borderColor: colors.warn }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="alert-circle" size={26} color={colors.warn} />
+              <Text style={{ flex: 1, marginLeft: 10, fontSize: font.small + 1, fontWeight: '700', color: colors.text }}>{r.message}</Text>
+            </View>
+          </Card>
+        ))}
 
         {groups.length === 0 && (
           <Card>

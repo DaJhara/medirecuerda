@@ -1,7 +1,8 @@
 // Ruta "/meds" (pestaña Medicamentos): lista de tratamientos.
 // Cada tarjeta tiene iconos para editar y eliminar (la eliminación pide confirmación).
 import React from 'react';
-import { View, Text, ScrollView, StyleSheet, Switch, TouchableOpacity, Alert } from 'react-native';
+import { View, ScrollView, StyleSheet, Switch, TouchableOpacity, Alert } from 'react-native';
+import { Text } from '../../src/components/AppText';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header, Card, Button, Badge } from '../../src/components/UI';
@@ -9,6 +10,7 @@ import { colors, font } from '../../src/theme';
 import { endDate, fmtDate } from '../../src/services/schedule';
 import { fmtInterval } from '../../src/utils/time';
 import { useApp } from '../../src/context/AppContext';
+import { refillInfo, needsRefillNow } from '../../src/services/refill';
 
 export default function MedsScreen() {
   const router = useRouter();
@@ -43,6 +45,8 @@ export default function MedsScreen() {
 
         {meds.map((m) => {
           const end = endDate(m);
+          const refill = refillInfo(m);
+          const refillNow = needsRefillNow(refill);
           return (
             <Card key={m.id} style={!m.active ? { opacity: 0.6 } : undefined}>
               <View style={s.row}>
@@ -59,8 +63,17 @@ export default function MedsScreen() {
               <View style={s.badges}>
                 <Badge text={fmtInterval(m.intervalHours)} />
                 <Badge text={end ? `Hasta ${fmtDate(end)}` : 'Tratamiento continuo'} />
+                {m.presentation ? <Badge text={m.presentation} /> : null}
+                {m.stockUnits != null && (
+                  <Badge
+                    text={`Quedan ${m.stockUnits}`}
+                    color={refillNow ? colors.warn : colors.primaryDark}
+                    bg={refillNow ? colors.warnBg : colors.primaryLight}
+                  />
+                )}
                 {!m.active && <Badge text="Suspendido" color={colors.muted} bg="#EEEEEE" />}
               </View>
+              {refillNow && <Text style={s.refill}>{refill.message}</Text>}
               {m.notes ? <Text style={s.notes}>{m.notes}</Text> : null}
               <View style={s.switchRow}>
                 <Text style={s.switchLabel}>Recordatorios activos</Text>
@@ -85,6 +98,7 @@ const s = StyleSheet.create({
   icon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   dose: { fontSize: font.body, color: colors.muted, marginTop: 2, marginBottom: 8 },
   badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  refill: { fontSize: 15, color: colors.warn, fontWeight: '700', marginTop: 8 },
   notes: { fontSize: 15, color: colors.primaryDark, marginTop: 8 },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
   switchLabel: { fontSize: 15, color: colors.muted, fontWeight: '600' },

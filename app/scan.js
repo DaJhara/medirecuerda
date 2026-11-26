@@ -2,7 +2,8 @@
 // (mercado colombiano) -> revisión -> guardar.
 // La IA solo transcribe; el usuario SIEMPRE revisa y corrige antes de guardar.
 import React, { useState } from 'react';
-import { View, Text, ScrollView, Image, ActivityIndicator, Alert, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, ScrollView, Image, ActivityIndicator, Alert, TouchableOpacity, StyleSheet } from 'react-native';
+import { Text } from '../src/components/AppText';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { Header, Button, Card, Field } from '../src/components/UI';

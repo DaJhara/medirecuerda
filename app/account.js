@@ -1,7 +1,8 @@
 // Ruta "/account": información de la cuenta con la sesión iniciada.
 // Espacio reservado para inicio de sesión y sincronización con el servidor (Postgres).
 import React, { useEffect, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, ScrollView, StyleSheet } from 'react-native';
+import { Text } from '../src/components/AppText';
 import { useRouter } from 'expo-router';
 import { Header, Card, Badge } from '../src/components/UI';
 import { colors, font } from '../src/theme';

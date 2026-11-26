@@ -41,6 +41,9 @@ function mapMed(r) {
     active: !!r.active,
     imageUrl: r.reference_image_url || null,
     imageSource: r.reference_image_source || null,
+    presentation: r.presentation || '',       // tabletas, gotas... (opcional)
+    stockUnits: r.stock_units ?? null,        // unidades que quedan (null = no se lleva control)
+    unitsPerDose: r.units_per_dose || 1,      // unidades que se gastan por toma
   };
 }
 
@@ -139,9 +142,10 @@ async function saveMedicationImpl(d) {
       const durationChanged = (old.duration_days ?? null) !== (d.durationDays ?? null);
       await db.runAsync(
         `UPDATE medications SET name=?, active_ingredient=?, dose=?, frequency_hours=?, start_at=?,
-           duration_days=?, notes=?, schedule_shift_ms=?, updated_at=? WHERE id=?`,
+           duration_days=?, notes=?, schedule_shift_ms=?, presentation=?, stock_units=?, units_per_dose=?, updated_at=? WHERE id=?`,
         [d.name, d.activeIngredient ?? old.active_ingredient, d.dose, d.intervalHours, d.startAt,
-         d.durationDays ?? null, d.notes || '', anchorChanged ? 0 : old.schedule_shift_ms, now, medId]
+         d.durationDays ?? null, d.notes || '', anchorChanged ? 0 : old.schedule_shift_ms,
+         d.presentation || null, d.stockUnits ?? null, d.unitsPerDose || 1, now, medId]
       );
       if (anchorChanged) {
         // Horario nuevo: se descartan las tomas pendientes de hoy en adelante y se regeneran.
@@ -163,10 +167,12 @@ async function saveMedicationImpl(d) {
       await db.runAsync(
         `INSERT INTO medications
            (id, user_id, name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
-            reference_image_url, reference_image_source, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+            reference_image_url, reference_image_source, presentation, stock_units, units_per_dose,
+            active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
         [medId, userId, d.name, d.activeIngredient || null, d.dose, d.intervalHours, d.startAt,
-         d.durationDays ?? null, d.notes || '', d.imageUrl || null, d.imageSource || null, now, now]
+         d.durationDays ?? null, d.notes || '', d.imageUrl || null, d.imageSource || null,
+         d.presentation || null, d.stockUnits ?? null, d.unitsPerDose || 1, now, now]
       );
     }
     const med = await db.getFirstAsync('SELECT * FROM medications WHERE id = ?', [medId]);
@@ -250,6 +256,15 @@ async function loadActionable(db, id) {
   return { row };
 }
 
+// Suma o resta las unidades de UNA toma al stock del medicamento (sign = -1 al tomar, +1 al deshacer).
+// Si el medicamento no lleva control de stock (stock_units NULL) no hace nada. Nunca baja de 0.
+async function adjustStock(db, medId, sign, nowMs) {
+  const m = await db.getFirstAsync('SELECT stock_units, units_per_dose FROM medications WHERE id = ?', [medId]);
+  if (m?.stock_units == null) return;
+  const next = Math.max(0, m.stock_units + sign * (m.units_per_dose || 1));
+  await db.runAsync('UPDATE medications SET stock_units = ?, updated_at = ? WHERE id = ?', [next, iso(nowMs), medId]);
+}
+
 // "Tomé": guarda dosis tomada, hora y si fue a tiempo.
 async function takeDoseImpl(id) {
   const db = await getDb();
@@ -264,6 +279,7 @@ async function takeDoseImpl(id) {
       [row.med_dose, iso(now), onTime, iso(now), id]
     );
     await addEvent(db, { doseId: id, medId: row.medication_id, type: 'taken', at: now, scheduledAt: row.scheduled_at });
+    await adjustStock(db, row.medication_id, -1, now); // descuenta las unidades de esta toma del stock
   });
   return { ok: true };
 }
@@ -338,6 +354,7 @@ async function undoDoseImpl(id) {
       [due, iso(now), id]
     );
     await addEvent(db, { doseId: id, medId: row.medication_id, type: 'undone', at: now, scheduledAt: row.scheduled_at });
+    if (row.status === 'taken') await adjustStock(db, row.medication_id, +1, now); // se devuelven las unidades
   });
   return { ok: true };
 }
@@ -404,10 +421,22 @@ async function getHistoryDayImpl(key) {
   return [...groups.values()];
 }
 
+// Todas las tomas con datos entre dos fechas (para exportar el historial a PDF).
+async function getHistoryRangeImpl(fromMs, toMs) {
+  const db = await getDb();
+  const rows = await db.getAllAsync(
+    `${DOSE_SELECT}
+     WHERE m.user_id = ? AND d.scheduled_at >= ? AND d.scheduled_at < ? AND ${HAS_DATA}
+     ORDER BY d.scheduled_at`,
+    [await getCurrentUserId(db), iso(fromMs), iso(toMs), iso(Date.now())]
+  );
+  return rows.map(mapDose);
+}
+
 // ---------------------------------------------------------------------------
 // Perfil, ajustes y cuenta
 // ---------------------------------------------------------------------------
-const DEFAULT_SETTINGS = { sound: true, vibrate: true };
+const DEFAULT_SETTINGS = { sound: true, vibrate: true, fontScale: 1 }; // fontScale: tamaño de letra (1 = normal)
 
 // Las versiones anteriores guardaban "Usuario local" como nombre; se trata como vacío.
 const cleanName = (n) => (!n || n === 'Usuario local' ? '' : n);
@@ -670,7 +699,7 @@ async function getSyncSnapshotImpl(since = null) {
   const medications = await db.getAllAsync(
     `SELECT id, name, active_ingredient, dose, frequency_hours, start_at, duration_days,
             notes, reference_image_url, reference_image_source, schedule_shift_ms,
-            active, created_at, updated_at, deleted_at
+            active, created_at, updated_at, deleted_at, presentation, stock_units, units_per_dose
      FROM medications WHERE user_id = ? AND (? IS NULL OR updated_at > ?) ORDER BY created_at`, [uid, since, since]
   );
   const doseLogs = await db.getAllAsync(
@@ -775,17 +804,19 @@ async function applyMedication(db, uid, m, logs, stamp) {
   if (local && !newer(m.updated_at, local.updated_at)) return false; // lo local es igual o más nuevo
   const vals = [m.name, m.active_ingredient || null, m.dose, Number(m.frequency_hours), m.start_at, num(m.duration_days),
     m.notes || '', m.reference_image_url || null, m.reference_image_source || null, Number(m.schedule_shift_ms || 0),
-    m.active ? 1 : 0, m.updated_at, m.deleted_at || null, stamp];
+    m.active ? 1 : 0, m.updated_at, m.deleted_at || null, m.presentation || null, num(m.stock_units), Number(m.units_per_dose || 1), stamp];
   if (!local) {
     await db.runAsync(
       `INSERT INTO medications (name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
-         reference_image_url, reference_image_source, schedule_shift_ms, active, updated_at, deleted_at, synced_at, id, user_id, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [...vals, m.id, uid, m.created_at || stamp]);
+         reference_image_url, reference_image_source, schedule_shift_ms, active, updated_at, deleted_at,
+         presentation, stock_units, units_per_dose, synced_at, id, user_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [...vals, m.id, uid, m.created_at || stamp]);
     return true;
   }
   await db.runAsync(
     `UPDATE medications SET name=?, active_ingredient=?, dose=?, frequency_hours=?, start_at=?, duration_days=?, notes=?,
-       reference_image_url=?, reference_image_source=?, schedule_shift_ms=?, active=?, updated_at=?, deleted_at=?, synced_at=?
+       reference_image_url=?, reference_image_source=?, schedule_shift_ms=?, active=?, updated_at=?, deleted_at=?,
+       presentation=?, stock_units=?, units_per_dose=?, synced_at=?
      WHERE id=?`, [...vals, m.id]);
   await discardStalePending(db, local, m, logs);
   return true;
@@ -944,6 +975,7 @@ export const undoDose = (id) => serial(() => undoDoseImpl(id));
 export const autoSkipExpired = () => serial(autoSkipExpiredImpl);
 export const getMonthMarks = (y, m) => serial(() => getMonthMarksImpl(y, m));
 export const getHistoryDay = (key) => serial(() => getHistoryDayImpl(key));
+export const getHistoryRange = (from, to) => serial(() => getHistoryRangeImpl(from, to));
 export const getSessionUser = () => serial(getSessionUserImpl);
 export const createPasswordAccount = (d) => serial(() => createPasswordAccountImpl(d));
 export const findAccount = (email) => serial(() => findAccountImpl(email));

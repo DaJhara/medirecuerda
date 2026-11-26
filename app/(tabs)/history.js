@@ -4,7 +4,8 @@
 // - Abajo: detalle del día elegido, por medicamento (se despliega al tocarlo).
 // Cada vez que se vuelve a esta pestaña, la fecha elegida y el calendario se reinician al día de HOY.
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Modal, Pressable } from 'react-native';
+import { View, ScrollView, StyleSheet, TouchableOpacity, Modal, Pressable, Alert } from 'react-native';
+import { Text } from '../../src/components/AppText';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Header, Card, Badge } from '../../src/components/UI';
@@ -13,6 +14,7 @@ import { fmtTime } from '../../src/services/schedule';
 import { dayKey, fmtInterval, parseDayKey } from '../../src/utils/time';
 import { getMonthMarks, getHistoryDay, getWeekSummary } from '../../src/db/repository';
 import { useApp } from '../../src/context/AppContext';
+import { exportHistoryPdf } from '../../src/services/historyPdf';
 
 const WEEKDAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 const BAR_AREA = 120; // alto máximo de las barras (px)
@@ -77,7 +79,7 @@ function buildWeeks(year, month) {
 }
 
 export default function HistoryScreen() {
-  const { todayDoses } = useApp(); // solo para recargar cuando cambia algo hoy
+  const { todayDoses, profile } = useApp(); // solo para recargar cuando cambia algo hoy
   const todayKey = dayKey(Date.now());
   const now0 = new Date();
 
@@ -108,6 +110,25 @@ export default function HistoryScreen() {
   useEffect(() => { getMonthMarks(cursor.year, cursor.month).then(setMarks).catch(() => {}); }, [cursor, todayDoses, tick]);
   // Detalle del día elegido.
   useEffect(() => { getHistoryDay(selected).then(setData).catch(() => {}); }, [selected, todayDoses, tick]);
+
+  // Descargar el historial en PDF: se elige el periodo y se abre el menú de compartir/guardar.
+  const [exporting, setExporting] = useState(false);
+  const exportPdf = async (days) => {
+    setExporting(true);
+    try {
+      await exportHistoryPdf({ days, profile });
+    } catch (e) {
+      Alert.alert('No se pudo crear el PDF', e.message);
+    } finally {
+      setExporting(false);
+    }
+  };
+  const askPeriod = () =>
+    Alert.alert('Descargar historial en PDF', 'Elige el periodo que quieres incluir.', [
+      { text: 'Últimos 7 días', onPress: () => exportPdf(7) },
+      { text: 'Últimos 30 días', onPress: () => exportPdf(30) },
+      { text: 'Últimos 90 días', onPress: () => exportPdf(90) },
+    ], { cancelable: true });
 
   const pickDay = (key) => {
     setSelected(key);
@@ -144,10 +165,15 @@ export default function HistoryScreen() {
         title="Historial"
         subtitle={selected === todayKey ? 'Últimos 7 días' : `Fecha: ${selectedLabel}`}
         right={
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity onPress={askPeriod} disabled={exporting} style={s.filter} accessibilityRole="button" accessibilityLabel="Descargar historial en PDF">
+              <Ionicons name={exporting ? 'hourglass-outline' : 'download-outline'} size={26} color={colors.white} />
+            </TouchableOpacity>
           <TouchableOpacity onPress={() => setCalOpen((v) => !v)} style={s.filter} accessibilityRole="button" accessibilityLabel="Filtrar por fecha">
             <Ionicons name={calOpen ? 'funnel' : 'funnel-outline'} size={26} color={colors.white} />
             {selected !== todayKey && <View style={s.filterDot} />}
           </TouchableOpacity>
+          </View>
         }
       />
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 30 }}>

@@ -46,6 +46,10 @@ CREATE TABLE medications (
     start_at               timestamptz NOT NULL,               -- hora de la primera toma
     duration_days          smallint CHECK (duration_days IS NULL OR duration_days > 0),
     notes                  text,
+    presentation           text,                               -- presentación: tabletas, gotas, jarabe... (opcional)
+    stock_units            integer CHECK (stock_units IS NULL OR stock_units >= 0),  -- unidades disponibles (opcional)
+    units_per_dose         smallint NOT NULL DEFAULT 1
+                           CHECK (units_per_dose BETWEEN 1 AND 100),   -- unidades que se gastan en cada toma
     reference_image_url    text,                               -- imagen de referencia (mercado colombiano)
     reference_image_source text,                               -- sitio de donde se tomó la imagen
     schedule_shift_ms      bigint NOT NULL DEFAULT 0,          -- desplazamiento acumulado por aplazamientos

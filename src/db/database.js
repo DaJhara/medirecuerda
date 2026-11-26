@@ -56,6 +56,21 @@ async function migrateSchema(db) {
   for (const [name, type] of wanted) {
     if (!cols.includes(name)) await db.execAsync(`ALTER TABLE app_users ADD COLUMN ${name} ${type}`);
   }
+  await migrateMedications(db);
+}
+
+// Columnas de medications agregadas después (presentación y stock). Mismas definiciones que src/db/schema.js.
+async function migrateMedications(db) {
+  const medCols = (await db.getAllAsync('PRAGMA table_info(medications)')).map((c) => c.name);
+  if (medCols.length === 0) return; // la tabla aún no existe: CREATE TABLE ya trae todo
+  const wanted = [
+    ['presentation', 'TEXT'],
+    ['stock_units', 'INTEGER CHECK (stock_units IS NULL OR stock_units >= 0)'],
+    ['units_per_dose', 'INTEGER NOT NULL DEFAULT 1 CHECK (units_per_dose BETWEEN 1 AND 100)'],
+  ];
+  for (const [name, type] of wanted) {
+    if (!medCols.includes(name)) await db.execAsync(`ALTER TABLE medications ADD COLUMN ${name} ${type}`);
+  }
 }
 
 // Crea el usuario local (un solo usuario por teléfono) y guarda su id.

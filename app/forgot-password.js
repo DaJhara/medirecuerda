@@ -1,6 +1,7 @@
 // Recuperación de contraseña mediante código enviado al correo por el backend.
 import React, { useState } from 'react';
-import { Text, ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { Text } from '../src/components/AppText';
 import { useRouter } from 'expo-router';
 import { Header, Button, Field, Card } from '../src/components/UI';
 import { colors, font } from '../src/theme';

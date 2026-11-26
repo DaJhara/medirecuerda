@@ -38,7 +38,9 @@ const EVENT_TYPES = ['snoozed', 'taken', 'skipped', 'auto_skipped', 'undone'];
 function checkMedication(m) {
   const hours = Number(m.frequency_hours);
   const ok = m.name && m.dose && m.start_at && Number.isInteger(hours) && hours >= 1 && hours <= 24;
-  if (!ok) throw invalid('Hay un medicamento con datos obligatorios no válidos.');
+  const stockOk = m.stock_units == null || (Number.isInteger(Number(m.stock_units)) && Number(m.stock_units) >= 0);
+  const unitsOk = m.units_per_dose == null || (Number.isInteger(Number(m.units_per_dose)) && Number(m.units_per_dose) >= 1 && Number(m.units_per_dose) <= 100);
+  if (!ok || !stockOk || !unitsOk) throw invalid('Hay un medicamento con datos obligatorios no válidos.');
 }
 function checkDose(d) {
   const ok = validId(d.medication_id) && d.scheduled_at && d.due_at && DOSE_STATUS.includes(d.status);
@@ -63,14 +65,15 @@ async function saveProfile(client, userId, profile) {
 const UPSERT_MEDICATION = `INSERT INTO medications
     (id, user_id, name, active_ingredient, dose, frequency_hours, start_at, duration_days,
      notes, reference_image_url, reference_image_source, schedule_shift_ms, active,
-     created_at, updated_at, deleted_at)
-   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     created_at, updated_at, deleted_at, presentation, stock_units, units_per_dose)
+   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
    ON CONFLICT (id) DO UPDATE SET
      name=EXCLUDED.name, active_ingredient=EXCLUDED.active_ingredient, dose=EXCLUDED.dose,
      frequency_hours=EXCLUDED.frequency_hours, start_at=EXCLUDED.start_at,
      duration_days=EXCLUDED.duration_days, notes=EXCLUDED.notes,
      reference_image_url=EXCLUDED.reference_image_url, reference_image_source=EXCLUDED.reference_image_source,
      schedule_shift_ms=EXCLUDED.schedule_shift_ms, active=EXCLUDED.active,
+     presentation=EXCLUDED.presentation, stock_units=EXCLUDED.stock_units, units_per_dose=EXCLUDED.units_per_dose,
      updated_at=EXCLUDED.updated_at, deleted_at=EXCLUDED.deleted_at, server_updated_at=now()
    WHERE medications.user_id=EXCLUDED.user_id AND medications.updated_at < EXCLUDED.updated_at`;
 
@@ -91,6 +94,7 @@ async function saveMedication(client, userId, m, doseLogs) {
     m.reference_image_url || null, m.reference_image_source || null,
     String(m.schedule_shift_ms ?? 0), !!m.active, dateOrNull(m.created_at),
     dateOrNull(m.updated_at), dateOrNull(m.deleted_at),
+    m.presentation || null, m.stock_units ?? null, Number(m.units_per_dose || 1),
   ]);
   // Si este cambio de HORARIO fue aceptado, las tomas PENDIENTES más viejas que él y que el teléfono ya no
   // tiene (porque cambió el horario) se descartan también aquí, para que no regresen en la próxima descarga.
@@ -227,7 +231,8 @@ router.get('/pull', async (req, res, next) => {
       query(`SELECT display_name, photo_url, age, height_cm, weight_kg, observations, updated_at FROM app_users WHERE id=$1`, [uid]),
       query(
         `SELECT id, name, active_ingredient, dose, frequency_hours, start_at, duration_days, notes,
-                reference_image_url, reference_image_source, schedule_shift_ms, active, created_at, updated_at, deleted_at
+                reference_image_url, reference_image_source, schedule_shift_ms, active, created_at, updated_at, deleted_at,
+                presentation, stock_units, units_per_dose
          FROM medications WHERE user_id=$1 AND ($2::timestamptz IS NULL OR server_updated_at > $2) ORDER BY created_at`, [uid, since]),
       query(
         `SELECT d.id, d.medication_id, d.scheduled_at, d.due_at, d.status, d.dose_taken, d.action_at, d.on_time,

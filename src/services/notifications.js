@@ -4,18 +4,38 @@ import * as Notifications from 'expo-notifications';
 import { Linking, Platform } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { fmtTime } from './schedule';
+import { refillInfo } from './refill';
 
 // En Android el sonido y la vibración pertenecen al CANAL y no se pueden cambiar después de creado.
 // Por eso hay un canal por cada combinación de ajustes (sonido sí/no x vibración sí/no).
 // Cada canal conserva el tono que el usuario elija en los ajustes del sistema.
+// El prefijo "v2" crea canales NUEVOS: los de versiones anteriores pudieron quedar creados sin vibración
+// (por el modo simplificado de más abajo) y Android no permite corregirlos, solo reemplazarlos.
 export const channelIdFor = (settings) =>
-  `medicamentos-${settings.sound ? 's1' : 's0'}-${settings.vibrate ? 'v1' : 'v0'}`;
+  `recordatorios-v2-${settings.sound ? 's1' : 's0'}-${settings.vibrate ? 'v1' : 'v0'}`;
+
+const LEGACY_CHANNELS = ['s0', 's1'].flatMap((snd) => ['v0', 'v1'].map((vib) => `medicamentos-${snd}-${vib}`));
 
 const channelName = (settings) =>
   `Recordatorios de medicamentos (${settings.sound ? 'con sonido' : 'sin sonido'}, ${settings.vibrate ? 'con vibración' : 'sin vibración'})`;
 
+const VIBRATION = [0, 500, 250, 500];
+
 // Canales ya creados en esta sesión (crear el mismo canal otra vez es innecesario).
 const createdChannels = new Set();
+// Con qué intento se creó el último canal (1 = configuración completa). Sirve para avisar en la prueba.
+let lastAttempt = 0;
+export const getChannelAttempt = () => lastAttempt;
+
+// Borra los canales de versiones anteriores (una sola vez por sesión) para que no queden en los ajustes del sistema.
+let legacyCleaned = false;
+async function removeLegacyChannels() {
+  if (legacyCleaned) return;
+  legacyCleaned = true;
+  for (const id of LEGACY_CHANNELS) {
+    try { await Notifications.deleteNotificationChannelAsync(id); } catch { /* no existía */ }
+  }
+}
 
 // Crea (o reutiliza) el canal de Android que corresponde a los ajustes actuales.
 // Algunas versiones del módulo nativo fallan con NullPointerException si se pasan ciertos valores en
@@ -26,19 +46,20 @@ export async function ensureChannel(settings) {
   if (Platform.OS !== 'android') return null;
   const id = channelIdFor(settings);
   if (createdChannels.has(id)) return id;
+  await removeLegacyChannels();
 
   const name = channelName(settings);
+  const importance = settings.sound ? Notifications.AndroidImportance.MAX : Notifications.AndroidImportance.HIGH;
   const attempts = [
-    // 1) Configuración completa; sin valores null ni patrones vacíos.
+    // 1) Configuración completa; sin valores null ni patrones vacíos. La vibración se pide siempre de forma
+    //    explícita (enableVibrate + patrón) para que Android no use el valor por defecto del fabricante.
     {
-      name,
-      importance: settings.sound ? Notifications.AndroidImportance.MAX : Notifications.AndroidImportance.LOW,
-      enableVibrate: settings.vibrate,
+      name, importance, enableVibrate: settings.vibrate, enableLights: true, lightColor: '#2E7D32',
       ...(settings.sound ? { sound: 'default' } : {}),
-      ...(settings.vibrate ? { vibrationPattern: [0, 500, 250, 500] } : {}),
+      ...(settings.vibrate ? { vibrationPattern: VIBRATION } : {}),
     },
     // 2) Sin sonido ni patrón personalizados.
-    { name, importance: settings.sound ? Notifications.AndroidImportance.MAX : Notifications.AndroidImportance.LOW, enableVibrate: settings.vibrate },
+    { name, importance, enableVibrate: settings.vibrate },
     // 3) Lo mínimo posible.
     { name, importance: Notifications.AndroidImportance.DEFAULT },
   ];
@@ -47,6 +68,7 @@ export async function ensureChannel(settings) {
       await Notifications.setNotificationChannelAsync(id, attempts[i]);
       if (i > 0) console.warn(`Canal "${id}" creado con configuración simplificada (intento ${i + 1}).`);
       createdChannels.add(id);
+      lastAttempt = i + 1;
       return id;
     } catch (e) {
       console.warn(`No se pudo crear el canal "${id}" (intento ${i + 1}/${attempts.length}):`, e.message);
@@ -105,13 +127,41 @@ export async function ensurePermissions(settings) {
   return true;
 }
 
-// Cancela todo y vuelve a programar las próximas tomas pendientes.
-// Recibe las tomas desde la base de datos (cada una con su hora vigente "dueAt").
+// Cancela todo y vuelve a programar las próximas tomas pendientes (y los avisos de resurtir).
+// Recibe las tomas desde la base de datos (cada una con su hora vigente "dueAt") y los medicamentos.
 // Como aplazar mueve la hora vigente en la BD, el nuevo aviso se programa automáticamente.
-export async function rescheduleAll(upcoming, settings) {
-  if (Platform.OS === 'web') return;
+//
+// Las llamadas se ponen en FILA: si dos pantallas piden reprogramar a la vez (por ejemplo, al abrir la app y al
+// terminar una sincronización), una se ejecutaba a mitad de la otra y cada toma quedaba programada DOS veces
+// (notificaciones dobles). Ahora corre una sola a la vez y, si llegaron más, se hace una última con los datos
+// más recientes. Además cada aviso tiene un identificador propio, así que nunca se repite.
+let running = null;
+let nextArgs = null;
 
-  // Cancelamos los recordatorios anteriores para reconstruirlos.
+export function rescheduleAll(upcoming, settings, meds = []) {
+  if (Platform.OS === 'web') return Promise.resolve();
+  nextArgs = { upcoming, settings, meds };
+  if (!running) running = drain();
+  return running;
+}
+
+async function drain() {
+  try {
+    while (nextArgs) {
+      const args = nextArgs;
+      nextArgs = null;
+      try {
+        await rescheduleNow(args);
+      } catch (e) {
+        console.warn('No se pudieron reprogramar los recordatorios:', e.message);
+      }
+    }
+  } finally {
+    running = null;
+  }
+}
+
+async function rescheduleNow({ upcoming, settings, meds }) {
   await Notifications.cancelAllScheduledNotificationsAsync();
 
   const now = Date.now();
@@ -123,10 +173,12 @@ export async function rescheduleAll(upcoming, settings) {
   for (const d of list) {
     const notesSuffix = d.notes ? ` · ${d.notes}` : '';
     await Notifications.scheduleNotificationAsync({
+      identifier: `dose-${d.id}-${d.dueAt}`,
       content: {
         title: d.snoozeCount > 0 ? 'Recordatorio aplazado' : 'Hora de tu medicamento',
         body: `${d.name} · ${d.dose}${notesSuffix} (${fmtTime(d.dueAt)})`,
         sound: settings.sound ? 'default' : false,
+        vibrate: settings.vibrate ? VIBRATION : undefined, // Android antiguo (antes de los canales)
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -135,6 +187,34 @@ export async function rescheduleAll(upcoming, settings) {
         ...(Platform.OS === 'android'
           ? { delivery: 'alarmClock' }
           : {}),
+      },
+    });
+  }
+  await scheduleRefillNotices(meds, settings, now);
+}
+
+// Aviso de resurtir: el primer día que faltan REFILL_DAYS días o menos (a las 9:00). Si ya faltan menos, se
+// avisa en la próxima mañana. Cada vez que se reprograma se recalcula con el stock actual.
+const REFILL_HOUR = 9;
+async function scheduleRefillNotices(meds, settings, now) {
+  for (const m of meds) {
+    const info = refillInfo(m, now);
+    if (!info) continue;
+    const at = new Date(Math.max(info.alertAt, now));
+    at.setHours(REFILL_HOUR, 0, 0, 0);
+    if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+    if (info.endsAt != null && at.getTime() >= info.endsAt) continue; // el tratamiento ya habrá terminado
+    await Notifications.scheduleNotificationAsync({
+      identifier: `refill-${m.id}`,
+      content: {
+        title: info.reason === 'stock' ? 'Hora de resurtir' : 'Tu tratamiento está por terminar',
+        body: info.message,
+        sound: settings.sound ? 'default' : false,
+      },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        date: at,
+        channelId: channelIdFor(settings),
       },
     });
   }
@@ -167,6 +247,7 @@ export async function sendTestNotification(settings) {
       title: 'Prueba de recordatorio',
       body: 'Así sonará y vibrará tu recordatorio de medicamentos.',
       sound: settings.sound ? 'default' : false,
+      vibrate: settings.vibrate ? VIBRATION : undefined,
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,

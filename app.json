@@ -2,6 +2,7 @@
   "expo": {
     "name": "MediRecuerda",
     "slug": "medirecuerda",
+    "icon": "./assets/icon.png",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -17,13 +18,18 @@
         "android.permission.VIBRATE",
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#2E7D32"
+      }
     },
     "plugins": [
       [
         "expo-notifications",
         {
-          "color": "#2E7D32"
+          "color": "#2E7D32",
+          "icon": "./assets/notification-icon.png"
         }
       ],
       [

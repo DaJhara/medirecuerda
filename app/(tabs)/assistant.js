@@ -4,7 +4,8 @@
 // - Opcional: el usuario puede compartir como contexto sus medicamentos y datos de perfil (edad, estatura, peso, observaciones) (apagado por defecto,
 //   porque esos datos se envían al servicio de IA).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, Keyboard, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Switch } from 'react-native';
+import { View, FlatList, Keyboard, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Switch } from 'react-native';
+import { Text, TextInput } from '../../src/components/AppText';
 import { Ionicons } from '@expo/vector-icons';
 import { Header } from '../../src/components/UI';
 import { colors, font, radius } from '../../src/theme';

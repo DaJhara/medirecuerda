@@ -2,7 +2,8 @@
 // Campos: foto, nombre completo (con apellidos), edad, altura, peso y observaciones.
 // Con Google, nombre y foto se toman de la cuenta la primera vez, pero aquí se pueden modificar.
 import React, { useState } from 'react';
-import { View, Text, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity, StyleSheet } from 'react-native';
+import { Text } from '../src/components/AppText';
 import { useRouter } from 'expo-router';
 import { Header, Button, Field, Avatar } from '../src/components/UI';
 import { colors } from '../src/theme';

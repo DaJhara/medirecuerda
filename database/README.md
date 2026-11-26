@@ -10,3 +10,8 @@
 - La app migra SQLite sola al abrir (`migrateSchema` en `src/db/database.js`).
 - `node database/check-schema.mjs` comprueba que `src/db/schema.js` y `database/sqlite/schema.sql` sean idénticos y que SQLite y PostgreSQL tengan las mismas tablas/columnas.
   Con `--write` regenera `database/sqlite/schema.sql` desde `schema.js`.
+
+## Presentación y stock (migración 004)
+- `medications` ahora guarda `presentation` (tabletas, gotas...; opcional), `stock_units` (unidades que quedan; opcional) y `units_per_dose` (unidades por toma, 1 por defecto).
+- Postgres ya desplegado: `backend/migrations/004_presentation_stock.sql` se aplica sola al iniciar el backend (despliega el backend ANTES de usar la app nueva).
+- SQLite: la app agrega las columnas sola al abrir (`migrateMedications` en `src/db/database.js`).

@@ -68,35 +68,21 @@ ${total === 0 ? '<p>No hay tomas registradas en este periodo.</p>' : `<table><tr
 </body></html>`;
 }
 
-// El archivo que crea expo-print queda en una carpeta que, en algunos teléfonos y en Expo Go, expo-sharing no tiene
-// permiso de leer ("Not allowed to read file under given URL"). La solución recomendada es copiarlo primero a la
-// carpeta de caché de la propia app y compartir esa copia. Si ninguna forma de copiar funciona, se usa el original.
-function copyToCache(uri) {
-  const name = `Historial-MediRecuerda-${new Date().toISOString().slice(0, 10)}.pdf`;
-  try {
-    // API moderna de expo-file-system
-    // eslint-disable-next-line global-require
-    const { File, Paths } = require('expo-file-system');
-    const dest = new File(Paths.cache, name);
-    if (dest.exists) dest.delete();
-    new File(uri).copy(dest);
-    return dest.uri;
-  } catch (e) {
-    console.warn('No se pudo copiar el PDF con la API nueva de archivos:', e.message);
-  }
-  return null;
-}
-
-async function copyToCacheLegacy(uri) {
+// El archivo que crea expo-print queda en una carpeta que, en Expo Go y en algunos teléfonos, ni expo-sharing ni
+// la API de archivos tienen permiso de leer ("Not allowed to read file" / "Missing READ permission").
+// Para no depender de leer ese archivo, se pide el PDF en base64 y se escribe una copia en la caché de la propia
+// app; esa copia sí se puede compartir. Si algo falla devuelve null y se intenta con el archivo original.
+async function writeToCache(base64) {
+  if (!base64) return null;
   try {
     // API clásica (sigue incluida en expo-file-system)
     // eslint-disable-next-line global-require
     const FS = require('expo-file-system/legacy');
     const dest = `${FS.cacheDirectory}Historial-MediRecuerda-${new Date().toISOString().slice(0, 10)}.pdf`;
-    await FS.copyAsync({ from: uri, to: dest });
+    await FS.writeAsStringAsync(dest, base64, { encoding: FS.EncodingType.Base64 });
     return dest;
   } catch (e) {
-    console.warn('No se pudo copiar el PDF con la API clásica de archivos:', e.message);
+    console.warn('No se pudo guardar el PDF en la caché de la app:', e.message);
     return null;
   }
 }
@@ -115,8 +101,8 @@ export async function exportHistoryPdf({ days, profile }) {
   }
   const to = Date.now() + DAY; // hasta mañana a esta hora (incluye todo lo de hoy)
   const doses = await getHistoryRange(to - (days + 1) * DAY, to);
-  const { uri } = await Print.printToFileAsync({ html: buildHistoryHtml({ doses, days, profile }) });
+  const { uri, base64 } = await Print.printToFileAsync({ html: buildHistoryHtml({ doses, days, profile }), base64: true });
   if (!(await Sharing.isAvailableAsync())) throw new Error('Este teléfono no permite compartir archivos.');
-  const shareUri = copyToCache(uri) || (await copyToCacheLegacy(uri)) || uri;
+  const shareUri = (await writeToCache(base64)) || uri;
   await Sharing.shareAsync(shareUri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf', dialogTitle: 'Historial de tomas' });
 }

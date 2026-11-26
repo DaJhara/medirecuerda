@@ -88,7 +88,8 @@ export async function findImage({ name, activeIngredient, strength, form }) {
 }
 
 // ---------------- Correo (Resend) ----------------
-export async function sendMail({ to, subject, text }) {
+// html y attachments son opcionales. attachments: [{ filename, content }] con content en base64 (formato de Resend).
+export async function sendMail({ to, subject, text, html, attachments }) {
   if (!config.resendKey) {
     // Sin proveedor de correo: solo para pruebas. NUNCA imprimir códigos en producción.
     if (!config.isProd) console.log(`[correo simulado] Para: ${to} | ${subject}\n${text}`);
@@ -98,8 +99,8 @@ export async function sendMail({ to, subject, text }) {
   const res = await timed('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${config.resendKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: config.mailFrom, to: [to], subject, text }),
-  }, 15000);
+    body: JSON.stringify({ from: config.mailFrom, to: [to], subject, text, ...(html ? { html } : {}), ...(attachments ? { attachments } : {}) }),
+  }, attachments ? 30000 : 15000);
   if (!res.ok) console.error('Resend respondió', res.status);
   return res.ok;
 }

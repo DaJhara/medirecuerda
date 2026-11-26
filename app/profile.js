@@ -2,7 +2,7 @@
 // Campos: foto, nombre completo (con apellidos), edad, altura, peso y observaciones.
 // Con Google, nombre y foto se toman de la cuenta la primera vez, pero aquí se pueden modificar.
 import React, { useState } from 'react';
-import { View, ScrollView, KeyboardAvoidingView, Platform, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, ScrollView, KeyboardAvoidingView, TouchableOpacity, StyleSheet } from 'react-native';
 import { Text } from '../src/components/AppText';
 import { useRouter } from 'expo-router';
 import { Header, Button, Field, Avatar } from '../src/components/UI';
@@ -64,8 +64,8 @@ export default function ProfileScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <Header title="Perfil" subtitle="Tus datos personales" onBack={() => router.back()} />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
           {/* Foto de perfil (modificable) */}
           <View style={s.photoBox}>
             <Avatar uri={photo} name={fullName} size={104} bg={colors.primaryLight} />
@@ -98,8 +98,11 @@ export default function ProfileScreen() {
             placeholder="Alergias, condiciones médicas, notas para tu médico..."
             hint="Solo se guarda en tu teléfono."
           />
-          <Button title={saving ? 'Guardando...' : 'Guardar'} onPress={submit} disabled={saving} />
-          <Button title="Cancelar" variant="outline" onPress={() => router.back()} style={{ marginTop: 10 }} />
+          {/* Botones lado a lado: más compactos y fáciles de distinguir */}
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+            <Button title="Cancelar" variant="outline" onPress={() => router.back()} style={{ flex: 1 }} />
+            <Button title={saving ? 'Guardando...' : 'Guardar'} onPress={submit} disabled={saving} style={{ flex: 1 }} />
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>

@@ -1,6 +1,6 @@
 // Recuperación de contraseña mediante código enviado al correo por el backend.
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { ScrollView, StyleSheet, KeyboardAvoidingView } from 'react-native';
 import { Text } from '../src/components/AppText';
 import { useRouter } from 'expo-router';
 import { Header, Button, Field, Card } from '../src/components/UI';
@@ -57,9 +57,9 @@ export default function ForgotPasswordScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior="padding">
       <Header title="Olvidé mi contraseña" onBack={() => router.back()} />
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <Card style={{ backgroundColor: colors.primaryLight, borderColor: colors.primaryMid }}>
           <Text style={s.info}>{codeSent
             ? 'Escribe el código de 6 dígitos que enviamos a tu correo y define una contraseña nueva. El código vence en 15 minutos.'

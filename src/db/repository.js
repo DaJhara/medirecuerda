@@ -503,7 +503,8 @@ async function getAccountInfoImpl() {
   const pending = await db.getFirstAsync(
     `SELECT COUNT(*) AS c FROM dose_logs d JOIN medications m ON m.id = d.medication_id
      WHERE m.user_id = ? AND d.synced_at IS NULL AND d.status <> 'pending'`, [uid]);
-  return { id: u.id, email: u.email || '', provider: u.auth_provider, createdAt: toMs(u.created_at),
+  const token = await db.getFirstAsync("SELECT value FROM app_meta WHERE key = 'remote_auth_token'");
+  return { id: u.id, email: u.email || '', provider: u.auth_provider, createdAt: toMs(u.created_at), linked: !!token?.value,
            meds: meds.c, records: logs.c, unsynced: pending.c };
 }
 
@@ -670,6 +671,10 @@ async function linkRemoteAccountImpl({ user, token }) {
       });
     }
     await setCurrentUserId(db, id);
+    // La fecha de creación de la cuenta es la del servidor (columna created_at de app_users en Postgres).
+    if (user.createdAt && !Number.isNaN(Date.parse(user.createdAt))) {
+      await db.runAsync('UPDATE app_users SET created_at = ? WHERE id = ?', [iso(Date.parse(user.createdAt)), id]);
+    }
     // Usuario nuevo en este teléfono (sin medicamentos ni datos de perfil): el perfil debe venir del servidor,
     // no subirse en blanco. Se marca como sincronizado para que la descarga lo llene.
     const hasData = await db.getFirstAsync(
@@ -919,6 +924,12 @@ async function clearRemoteAuthImpl() {
 // Cierra la sesión. Con { wipe: true } (cuenta del servidor) también borra la copia local del usuario:
 // medicamentos, tomas, historial y perfil (el servidor es la fuente principal y al volver a entrar se descarga todo).
 // Las filas hijas se eliminan en cascada.
+// Guarda la fecha de creación que informa el servidor (para sesiones iniciadas antes de que se guardara).
+async function setAccountCreatedAtImpl(ms) {
+  const db = await getDb();
+  await db.runAsync('UPDATE app_users SET created_at = ? WHERE id = ?', [iso(ms), await getCurrentUserId(db)]);
+}
+
 async function signOutImpl({ wipe = false } = {}) {
   const db = await getDb();
   const uid = await getCurrentUserId(db);
@@ -998,3 +1009,4 @@ export const saveProfile = (p) => serial(() => saveProfileImpl(p));
 export const getSettings = () => serial(getSettingsImpl);
 export const saveSettings = (s) => serial(() => saveSettingsImpl(s));
 export const getAccountInfo = () => serial(getAccountInfoImpl);
+export const setAccountCreatedAt = (ms) => serial(() => setAccountCreatedAtImpl(ms));

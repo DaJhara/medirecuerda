@@ -3,7 +3,7 @@
 // Es la única pantalla accesible sin sesión (ver app/_layout.js): al iniciar sesión, el layout
 // lleva solo a las pestañas.
 import React, { useState, useEffect } from 'react';
-import { View, ScrollView, StyleSheet, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, ScrollView, StyleSheet, TouchableOpacity, KeyboardAvoidingView } from 'react-native';
 import { Text, TextInput } from '../src/components/AppText';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -61,8 +61,8 @@ export default function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={[s.content, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled">
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior="padding">
+      <ScrollView contentContainerStyle={[s.content, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 120 }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         {/* Marca */}
         <View style={s.brand}>
           <View style={s.logo}>

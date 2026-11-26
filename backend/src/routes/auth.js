@@ -1,5 +1,5 @@
 // Rutas de cuentas: /auth/register, /auth/login, /auth/google, /auth/forgot-password,
-// /auth/reset-password, /auth/change-password y /auth/me.
+// /auth/reset-password, /auth/change-password, /auth/me y DELETE /auth/account.
 import crypto from 'node:crypto';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
@@ -33,6 +33,7 @@ const hashCode = (code) => crypto.createHash('sha256').update(`${config.jwtSecre
 // Datos del usuario que se devuelven a la app (nunca el hash).
 const publicUser = (u) => ({
   id: u.id, email: u.email, provider: u.auth_provider, name: u.display_name || '', photoUrl: u.photo_url || null,
+  createdAt: u.created_at, // fecha en que se creó la cuenta (columna created_at de app_users)
 });
 const session = (u) => ({ token: signToken(u), user: publicUser(u) });
 
@@ -189,6 +190,72 @@ router.get('/me', requireUser, async (req, res, next) => {
     const u = (await query('SELECT * FROM app_users WHERE id = $1', [req.user.id])).rows[0];
     if (!u) return bad(res, 401, 'La sesión ya no es válida.');
     res.json({ user: publicUser(u) });
+  } catch (e) { next(e); }
+});
+
+// ---- Eliminar la cuenta ----
+// 1) Se envía al correo registrado el historial completo (resumen en el cuerpo y el detalle en un CSV adjunto).
+// 2) Solo si el correo salió bien, se borra el usuario; sus medicamentos, tomas y eventos se borran en cascada.
+// Si el correo falla, NO se borra nada: así el usuario no pierde su historial.
+const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+const fmtLocal = (d) => (d ? new Date(d).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour12: false }) : '');
+const STATUS_ES = { taken: 'Tomada', skipped: 'Omitida', pending: 'Sin respuesta' };
+const escHtml = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+async function buildHistoryExport(userId) {
+  const meds = (await query(
+    `SELECT id, name, dose, presentation, frequency_hours, start_at, duration_days, stock_units
+     FROM medications WHERE user_id = $1 AND deleted_at IS NULL ORDER BY name`, [userId])).rows;
+  const doses = (await query(
+    `SELECT m.name, m.dose, d.scheduled_at, d.status, d.action_at, d.on_time, d.snooze_count, d.auto_skipped
+     FROM dose_logs d JOIN medications m ON m.id = d.medication_id
+     WHERE m.user_id = $1 AND (d.status <> 'pending' OR d.due_at < now())
+     ORDER BY d.scheduled_at`, [userId])).rows;
+
+  const header = ['Medicamento', 'Dosis', 'Fecha y hora prevista', 'Estado', 'Hora de registro', 'A tiempo', 'Aplazos', 'Omitida automáticamente'];
+  const lines = doses.map((d) => [
+    d.name, d.dose, fmtLocal(d.scheduled_at), STATUS_ES[d.status] || d.status, fmtLocal(d.action_at),
+    d.on_time == null ? '' : (d.on_time ? 'Sí' : 'No'), d.snooze_count || 0, d.auto_skipped ? 'Sí' : 'No',
+  ].map(csvCell).join(','));
+  // BOM para que Excel abra bien los acentos.
+  const csv = `\uFEFF${header.map(csvCell).join(',')}\n${lines.join('\n')}\n`;
+
+  const taken = doses.filter((d) => d.status === 'taken').length;
+  const medRows = meds.map((m) => {
+    const mine = doses.filter((d) => d.name === m.name);
+    const t = mine.filter((d) => d.status === 'taken').length;
+    return `<tr><td>${escHtml(m.name)}</td><td>${escHtml(m.dose)}</td><td>${escHtml(m.presentation || '—')}</td><td>cada ${m.frequency_hours} h</td><td>${t} de ${mine.length}</td></tr>`;
+  }).join('');
+  return { csv, total: doses.length, taken, medRows, medCount: meds.length };
+}
+
+router.delete('/account', requireUser, async (req, res, next) => {
+  try {
+    const u = (await query('SELECT * FROM app_users WHERE id = $1', [req.user.id])).rows[0];
+    if (!u) return bad(res, 404, 'La cuenta ya no existe.');
+    if (!u.email) return bad(res, 400, 'La cuenta no tiene un correo al que enviar el historial.');
+
+    const h = await buildHistoryExport(u.id);
+    const pct = h.total ? Math.round((h.taken / h.total) * 100) : 0;
+    const text = `Hola ${u.display_name || ''},\n\nEliminaste tu cuenta de MediRecuerda. Adjuntamos tu historial de tomas (${h.total} registros, ${pct}% de cumplimiento) en un archivo CSV que puedes abrir con Excel.\n\nTus datos fueron borrados de nuestra base de datos.\n\nMediRecuerda`;
+    const html = `<div style="font-family:Arial,sans-serif;color:#1B2B1E"><h2 style="color:#2E7D32">MediRecuerda · Tu historial</h2>
+<p>Hola ${escHtml(u.display_name || '')}, eliminaste tu cuenta. Aquí tienes un resumen de tu historial; el detalle completo va en el archivo CSV adjunto.</p>
+<p><b>${h.total}</b> registros · <b>${pct}%</b> de cumplimiento (${h.taken} tomas realizadas).</p>
+<table cellpadding="6" style="border-collapse:collapse;border:1px solid #D5E3D7"><tr style="background:#2E7D32;color:#fff"><th>Medicamento</th><th>Dosis</th><th>Presentación</th><th>Frecuencia</th><th>Tomadas</th></tr>${h.medRows}</table>
+<p style="color:#5F6F63">Tus datos fueron borrados de nuestra base de datos.</p></div>`;
+
+    const sent = await sendMail({
+      to: u.email,
+      subject: 'MediRecuerda: tu historial y la eliminación de tu cuenta',
+      text, html,
+      attachments: [{ filename: 'historial-medirecuerda.csv', content: Buffer.from(h.csv, 'utf8').toString('base64') }],
+    });
+    // En producción el correo es obligatorio; en pruebas (sin proveedor de correo) se permite continuar.
+    if (!sent && config.isProd) {
+      return bad(res, 502, 'No se pudo enviar tu historial al correo, por eso no se eliminó la cuenta. Intenta de nuevo en un momento.');
+    }
+    await query('DELETE FROM app_users WHERE id = $1', [u.id]);
+    res.json({ ok: true });
   } catch (e) { next(e); }
 });
 

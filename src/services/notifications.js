@@ -63,6 +63,7 @@ export async function ensureChannel(settings) {
     // 3) Lo mínimo posible.
     { name, importance: Notifications.AndroidImportance.DEFAULT },
   ];
+  let lastError = null;
   for (let i = 0; i < attempts.length; i++) {
     try {
       await Notifications.setNotificationChannelAsync(id, attempts[i]);
@@ -71,9 +72,12 @@ export async function ensureChannel(settings) {
       lastAttempt = i + 1;
       return id;
     } catch (e) {
-      console.warn(`No se pudo crear el canal "${id}" (intento ${i + 1}/${attempts.length}):`, e.message);
+      lastError = e; // se sigue con el intento más simple
     }
   }
+  // Un solo aviso (no uno por intento). En Expo Go de Android el módulo de canales falla incluso con lo mínimo:
+  // para probar sonido y vibración hay que usar la app instalada (APK o dev client).
+  console.warn(`No se pudo crear el canal "${id}" (${attempts.length} intentos). Último error:`, lastError?.message);
   return null;
 }
 

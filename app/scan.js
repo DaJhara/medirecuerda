@@ -2,7 +2,7 @@
 // (mercado colombiano) -> revisión -> guardar.
 // La IA solo transcribe; el usuario SIEMPRE revisa y corrige antes de guardar.
 import React, { useState } from 'react';
-import { View, ScrollView, Image, ActivityIndicator, Alert, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, ScrollView, Image, ActivityIndicator, Alert, TouchableOpacity, StyleSheet, KeyboardAvoidingView } from 'react-native';
 import { Text } from '../src/components/AppText';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
@@ -110,7 +110,8 @@ export default function ScanScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <Header title="Escanear orden médica" subtitle="La IA propone, tú confirmas" onBack={onClose} />
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <Card style={{ backgroundColor: colors.primaryLight, borderColor: colors.primaryMid }}>
           <Text style={s.note}>
             Fotografía tu orden médica o pega su texto. Revisa siempre los datos con tu fórmula original: la app no
@@ -173,6 +174,7 @@ export default function ScanScreen() {
           </View>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }

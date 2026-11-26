@@ -185,6 +185,17 @@ export function AppProvider({ children }) {
     doSync();
   }, [doSync]);
 
+  // Elimina la cuenta (el historial se envía antes al correo) y deja la app en la pantalla de inicio de sesión.
+  const deleteAccount = useCallback(async () => {
+    await auth.deleteAccount(); // si falla (por ejemplo, el correo no salió) lanza el error y no se borra nada
+    sessionRef.current = null;
+    await rescheduleAll([], settingsRef.current).catch(() => {});
+    setMeds([]);
+    setTodayDoses([]);
+    setProfile(EMPTY_PROFILE);
+    setSession(null);
+  }, []);
+
   // ---- Ajustes de sonido y vibración: se guardan, se crea el canal y se reprograman los avisos ----
   const updateSettings = useCallback(async (patch) => {
     const next = { ...settingsRef.current, ...patch };
@@ -261,12 +272,12 @@ export function AppProvider({ children }) {
   // El valor del contexto se memoriza: solo cambia cuando cambian los datos, no en cada render.
   const value = useMemo(() => ({
     meds, todayDoses, ready, session, profile, settings, saveProfile, updateSettings,
-    signUp, signIn, signInGoogle, signOut,
+    signUp, signIn, signInGoogle, signOut, deleteAccount,
     takeDose, skipDose, snoozeDose, undoDose,
     saveMed, saveMany, deleteMed, toggleActive, fetchImage,
   }), [
     meds, todayDoses, ready, session, profile, settings, saveProfile, updateSettings,
-    signUp, signIn, signInGoogle, signOut,
+    signUp, signIn, signInGoogle, signOut, deleteAccount,
     takeDose, skipDose, snoozeDose, undoDose,
     saveMed, saveMany, deleteMed, toggleActive, fetchImage,
   ]);

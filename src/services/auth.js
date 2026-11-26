@@ -175,3 +175,30 @@ export async function logout() {
   await repo.clearRemoteAuth();
   await signOutGoogle();
 }
+
+// Fecha de creación de la cuenta tal como está en el servidor (tabla app_users). Se llama al abrir la pantalla
+// Cuenta; sin conexión o sin sesión remota no hace nada. Devuelve true si actualizó la fecha local.
+export async function refreshAccountCreatedAt() {
+  try {
+    const token = await repo.getRemoteAuthToken();
+    if (!token || !hasBackend()) return false;
+    const { user } = await api('/auth/me', { token, timeout: 8000 });
+    const ms = Date.parse(user?.createdAt);
+    if (Number.isNaN(ms)) return false;
+    await repo.setAccountCreatedAt(ms);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Elimina la cuenta. En el servidor primero se envía el historial al correo registrado y luego se borran los
+// datos; si el correo no sale, el servidor responde con error y NO se borra nada (ni allí ni en el teléfono).
+// Después se borra la copia local. Una cuenta que solo existe en este teléfono se borra localmente.
+export async function deleteAccount() {
+  const token = await repo.getRemoteAuthToken();
+  if (token) await api('/auth/account', { method: 'DELETE', token, timeout: 45000 });
+  await repo.signOutUser({ wipe: true });
+  await repo.clearRemoteAuth();
+  await signOutGoogle();
+}

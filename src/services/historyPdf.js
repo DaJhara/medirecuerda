@@ -68,6 +68,39 @@ ${total === 0 ? '<p>No hay tomas registradas en este periodo.</p>' : `<table><tr
 </body></html>`;
 }
 
+// El archivo que crea expo-print queda en una carpeta que, en algunos teléfonos y en Expo Go, expo-sharing no tiene
+// permiso de leer ("Not allowed to read file under given URL"). La solución recomendada es copiarlo primero a la
+// carpeta de caché de la propia app y compartir esa copia. Si ninguna forma de copiar funciona, se usa el original.
+function copyToCache(uri) {
+  const name = `Historial-MediRecuerda-${new Date().toISOString().slice(0, 10)}.pdf`;
+  try {
+    // API moderna de expo-file-system
+    // eslint-disable-next-line global-require
+    const { File, Paths } = require('expo-file-system');
+    const dest = new File(Paths.cache, name);
+    if (dest.exists) dest.delete();
+    new File(uri).copy(dest);
+    return dest.uri;
+  } catch (e) {
+    console.warn('No se pudo copiar el PDF con la API nueva de archivos:', e.message);
+  }
+  return null;
+}
+
+async function copyToCacheLegacy(uri) {
+  try {
+    // API clásica (sigue incluida en expo-file-system)
+    // eslint-disable-next-line global-require
+    const FS = require('expo-file-system/legacy');
+    const dest = `${FS.cacheDirectory}Historial-MediRecuerda-${new Date().toISOString().slice(0, 10)}.pdf`;
+    await FS.copyAsync({ from: uri, to: dest });
+    return dest;
+  } catch (e) {
+    console.warn('No se pudo copiar el PDF con la API clásica de archivos:', e.message);
+    return null;
+  }
+}
+
 // Genera el PDF de los últimos "days" días y abre el menú de compartir. Lanza Error con mensaje en español.
 export async function exportHistoryPdf({ days, profile }) {
   let Print;
@@ -84,5 +117,6 @@ export async function exportHistoryPdf({ days, profile }) {
   const doses = await getHistoryRange(to - (days + 1) * DAY, to);
   const { uri } = await Print.printToFileAsync({ html: buildHistoryHtml({ doses, days, profile }) });
   if (!(await Sharing.isAvailableAsync())) throw new Error('Este teléfono no permite compartir archivos.');
-  await Sharing.shareAsync(uri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf', dialogTitle: 'Historial de tomas' });
+  const shareUri = copyToCache(uri) || (await copyToCacheLegacy(uri)) || uri;
+  await Sharing.shareAsync(shareUri, { mimeType: 'application/pdf', UTI: 'com.adobe.pdf', dialogTitle: 'Historial de tomas' });
 }

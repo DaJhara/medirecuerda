@@ -1,7 +1,7 @@
 // Ruta "/med-form": crear o editar un medicamento (parámetro opcional ?id=...).
 // Sirve para registrar cambios de dosis, frecuencia, horario o duración.
 import React, { useState } from 'react';
-import { View, ScrollView, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, ScrollView, Alert, KeyboardAvoidingView } from 'react-native';
 import { Text } from '../src/components/AppText';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Header, Button, Chip, Field } from '../src/components/UI';
@@ -103,8 +103,8 @@ export default function MedFormScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <Header title={editing ? 'Editar medicamento' : 'Nuevo medicamento'} onBack={onClose} />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
           <Field label="Medicamento" value={name} onChangeText={setName} placeholder="Ej. Losartán 50 mg" />
           <Field label="Dosis por toma" value={dose} onChangeText={setDose} placeholder="Ej. 1 tableta" />
 
@@ -167,8 +167,11 @@ export default function MedFormScreen() {
           {hint && <Text style={{ fontSize: 14, marginBottom: 14, color: hint.warn ? colors.warn : colors.primaryDark }}>{hint.text}</Text>}
           <Field label="Indicaciones (opcional)" value={notes} onChangeText={setNotes} placeholder="Ej. Con comida" multiline />
 
-          <Button title="Guardar" onPress={submit} style={{ marginTop: 6 }} />
-          <Button title="Cancelar" variant="outline" onPress={onClose} style={{ marginTop: 10 }} />
+          {/* Botones lado a lado: más compactos y fáciles de distinguir */}
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+            <Button title="Cancelar" variant="outline" onPress={onClose} style={{ flex: 1 }} />
+            <Button title="Guardar" onPress={submit} style={{ flex: 1 }} />
+          </View>
           {editing && <Button title="Eliminar medicamento" variant="danger" onPress={confirmDelete} style={{ marginTop: 10 }} />}
         </ScrollView>
       </KeyboardAvoidingView>

@@ -1,7 +1,7 @@
 // Ruta "/change-password": cambiar la contraseña con la sesión iniciada (se abre desde el menú lateral).
 // Pide la contraseña actual y la nueva (2 veces). Las cuentas de Google no tienen contraseña aquí.
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import { ScrollView, StyleSheet, KeyboardAvoidingView } from 'react-native';
 import { Text } from '../src/components/AppText';
 import { useRouter } from 'expo-router';
 import { Header, Button, Field, Card } from '../src/components/UI';
@@ -44,9 +44,9 @@ export default function ChangePasswordScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.bg }} behavior="padding">
       <Header title="Cambiar contraseña" onBack={() => router.back()} />
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 120 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         {isGoogle ? (
           <Card style={{ backgroundColor: colors.primaryLight, borderColor: colors.primaryMid }}>
             <Text style={s.info}>Tu cuenta usa Google, por eso no tiene contraseña en MediRecuerda. Para cambiarla, hazlo desde tu cuenta de Google.</Text>

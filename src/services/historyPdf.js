@@ -38,7 +38,7 @@ export function buildHistoryHtml({ doses, days, profile }) {
   const rows = summarize(doses);
   const detail = doses
     .map((d) => `<tr>
-      <td>${esc(fmtDay(d.scheduledAt))}</td><td>${esc(fmtTime(d.scheduledAt))}</td>
+      <td>${esc(fmtDay(d.plannedAt))}</td><td>${esc(fmtTime(d.plannedAt))}</td>
       <td>${esc(d.name)}</td><td>${esc(d.dose)}</td><td>${esc(statusOf(d))}</td>
       <td>${d.actionAt ? esc(fmtTime(d.actionAt)) : '—'}</td>
       <td>${d.snoozeCount > 0 ? d.snoozeCount : '—'}</td></tr>`)

@@ -30,7 +30,7 @@ const LATE = { tagColor: colors.leaf, tagBg: colors.leafBg };
 function snoozeLine(d) {
   if (d.snoozeCount <= 0) return null;
   const times = d.snoozeCount === 1 ? 'vez' : 'veces';
-  const from = fmtTime(d.scheduledAt);
+  const from = fmtTime(d.plannedAt);
   const to = fmtTime(d.postponedTo ?? d.dueAt);
   return `Aplazada ${d.snoozeCount} ${times}: ${from} → ${to}`;
 }
@@ -261,7 +261,7 @@ export default function HistoryScreen() {
                     return (
                       <View key={d.id} style={s.dose}>
                         <View style={s.doseHead}>
-                          <Text style={s.doseTime}>{fmtTime(d.scheduledAt)}</Text>
+                          <Text style={s.doseTime}>{fmtTime(d.plannedAt)}</Text>
                           <Badge text={info.tag} color={info.tagColor} bg={info.tagBg} />
                         </View>
                         <Text style={s.doseTitle}>{info.title}</Text>

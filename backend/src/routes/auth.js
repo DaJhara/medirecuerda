@@ -209,14 +209,18 @@ async function buildHistoryExport(userId) {
     `SELECT id, name, dose, presentation, frequency_hours, start_at, duration_days, stock_units
      FROM medications WHERE user_id = $1 AND deleted_at IS NULL ORDER BY name`, [userId])).rows;
   const doses = (await query(
-    `SELECT m.name, m.dose, d.scheduled_at, d.status, d.action_at, d.on_time, d.snooze_count, d.auto_skipped
+    `SELECT m.name, m.dose,
+            COALESCE((SELECT e.postponed_from FROM dose_events e
+                       WHERE e.dose_log_id = d.id AND e.event_type = 'snoozed' ORDER BY e.event_at LIMIT 1),
+                     CASE WHEN d.snooze_count > 0 THEN d.scheduled_at ELSE d.due_at END) AS planned_at,
+            d.scheduled_at, d.status, d.action_at, d.on_time, d.snooze_count, d.auto_skipped
      FROM dose_logs d JOIN medications m ON m.id = d.medication_id
      WHERE m.user_id = $1 AND (d.status <> 'pending' OR d.due_at < now())
      ORDER BY d.scheduled_at`, [userId])).rows;
 
   const header = ['Medicamento', 'Dosis', 'Fecha y hora prevista', 'Estado', 'Hora de registro', 'A tiempo', 'Aplazos', 'Omitida automáticamente'];
   const lines = doses.map((d) => [
-    d.name, d.dose, fmtLocal(d.scheduled_at), STATUS_ES[d.status] || d.status, fmtLocal(d.action_at),
+    d.name, d.dose, fmtLocal(d.planned_at), STATUS_ES[d.status] || d.status, fmtLocal(d.action_at),
     yesNo(d.on_time), d.snooze_count || 0, d.auto_skipped ? 'Sí' : 'No',
   ].map(csvCell).join(','));
   // BOM para que Excel abra bien los acentos.

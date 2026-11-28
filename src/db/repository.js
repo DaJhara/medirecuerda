@@ -47,6 +47,15 @@ function mapMed(r) {
   };
 }
 
+// La hora que de verdad le tocaba a la toma. scheduled_at es la del calendario original y NO incluye los aplazos de
+// tomas anteriores (que corren todo el horario); por eso se toma la hora vigente justo antes del primer aplazo
+// (guardada en la bitácora) y, si la toma nunca se aplazó, simplemente su hora vigente.
+function plannedAtOf(r) {
+  const first = toMs(r.first_due);
+  if (first != null) return first;
+  return r.snooze_count > 0 ? toMs(r.scheduled_at) : toMs(r.due_at);
+}
+
 function mapDose(r) {
   return {
     id: r.id,
@@ -58,8 +67,9 @@ function mapDose(r) {
     imageUrl: r.reference_image_url || null,
     imageSource: r.reference_image_source || null,
     activeIngredient: r.active_ingredient || '',
-    scheduledAt: toMs(r.scheduled_at), // hora inicial planeada
-    dueAt: toMs(r.due_at),             // hora vigente
+    scheduledAt: toMs(r.scheduled_at), // hora del calendario original (no cambia nunca)
+    dueAt: toMs(r.due_at),             // hora vigente (ya con los aplazos acumulados)
+    plannedAt: plannedAtOf(r),         // hora que le tocaba en realidad ANTES de aplazarla (la que ve el usuario)
     status: r.status,                  // pending | taken | skipped
     snoozeCount: r.snooze_count,
     postponedTo: toMs(r.postponed_to),
@@ -72,7 +82,10 @@ function mapDose(r) {
 
 const DOSE_SELECT = `
   SELECT d.*, m.name, m.dose AS med_dose, m.frequency_hours, m.notes,
-         m.reference_image_url, m.reference_image_source, m.active_ingredient
+         m.reference_image_url, m.reference_image_source, m.active_ingredient,
+         (SELECT e.postponed_from FROM dose_events e
+           WHERE e.dose_log_id = d.id AND e.event_type = 'snoozed'
+           ORDER BY e.event_at LIMIT 1) AS first_due
   FROM dose_logs d JOIN medications m ON m.id = d.medication_id`;
 
 // Guarda una acción en la bitácora.

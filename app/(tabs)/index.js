@@ -14,7 +14,7 @@ import { colors, font } from '../../src/theme';
 import { fmtTime } from '../../src/services/schedule';
 import { useApp } from '../../src/context/AppContext';
 import { refillInfo, needsRefillNow } from '../../src/services/refill';
-import { MAX_SNOOZES, AUTO_SKIP_MINUTES, ON_TIME_TOLERANCE_MIN, SNOOZE_MINUTES } from '../../src/db/repository';
+import { MAX_SNOOZES, autoSkipWaitMin, ON_TIME_TOLERANCE_MIN, SNOOZE_MINUTES } from '../../src/db/repository';
 
 const MIN = 60000;
 
@@ -167,9 +167,9 @@ export default function TodayScreen() {
                   {!reached && f.snoozeCount > 0 && (
                     <Text style={s.hint}>Aplazada hasta las {fmtTime(f.dueAt)} ({f.snoozeCount} de {MAX_SNOOZES} aplazos).</Text>
                   )}
-                  {reached && lastChance && (
-                    <Text style={[s.hint, { color: colors.warn }]}>
-                      Ya no puedes aplazar. Si no la marcas, se omitirá a las {fmtTime(f.dueAt + AUTO_SKIP_MINUTES * MIN)}.
+                  {reached && (
+                    <Text style={[s.hint, lastChance && { color: colors.warn }]}>
+                      {lastChance ? 'Ya no puedes aplazar. ' : ''}Si no la marcas, se omitirá a las {fmtTime(f.dueAt + autoSkipWaitMin(f.snoozeCount) * MIN)}.
                     </Text>
                   )}
                 </>

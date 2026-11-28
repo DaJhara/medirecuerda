@@ -9,7 +9,12 @@ import { iso, startOfDay, parseDayKey, dayKey, uuid, MIN, HOUR, DAY } from '../u
 
 export const SNOOZE_MINUTES = 10;       // cuánto se aplaza cada vez
 export const MAX_SNOOZES = 2;           // máximo de aplazamientos por toma
-export const AUTO_SKIP_MINUTES = 10;    // espera en el tercer momento antes de omitir sola
+export const AUTO_SKIP_MINUTES = 10;    // espera mínima (tercer momento) antes de omitir sola
+
+// Minutos que se espera, contados desde la hora vigente de la toma, antes de omitirla sola. Cada aplazo que
+// todavía le quedaba disponible suma otros SNOOZE_MINUTES: 0 aplazos usados = 30 min, 1 = 20 min, 2 = 10 min.
+export const autoSkipWaitMin = (snoozeCount) =>
+  AUTO_SKIP_MINUTES + Math.max(0, MAX_SNOOZES - snoozeCount) * SNOOZE_MINUTES;
 export const ON_TIME_TOLERANCE_MIN = 15; // margen para considerar una toma "a tiempo"
 const HORIZON_DAYS = 14;                // días de tomas que se generan por adelantado
 
@@ -356,8 +361,10 @@ async function undoDoseImpl(id) {
   const row = await db.getFirstAsync('SELECT * FROM dose_logs WHERE id = ?', [id]);
   if (!row || row.status === 'pending' || row.auto_skipped) return { ok: false, reason: 'estado' };
   const now = Date.now();
-  // Si ya agotó los aplazamientos, la ventana de 10 min del tercer momento vuelve a empezar.
-  const due = row.snooze_count >= MAX_SNOOZES ? iso(now) : row.due_at;
+  // Si ya agotó los aplazamientos, o su plazo para omitirse sola ya habría vencido, la ventana vuelve a empezar
+  // (si no, se omitiría de nuevo en cuanto se deshace).
+  const expired = Date.parse(row.due_at) + autoSkipWaitMin(row.snooze_count) * MIN <= now;
+  const due = row.snooze_count >= MAX_SNOOZES || expired ? iso(now) : row.due_at;
   await db.withTransactionAsync(async () => {
     await db.runAsync(
       `UPDATE dose_logs SET status='pending', dose_taken=NULL, action_at=NULL, on_time=NULL,
@@ -372,8 +379,8 @@ async function undoDoseImpl(id) {
 
 // Marca una toma vencida como omitida automática y deja el evento en la bitácora.
 async function autoSkipRow(db, r) {
-  // La hora registrada es la del vencimiento (due + 10 min), aunque la app se haya enterado tarde.
-  const at = Date.parse(r.due_at) + AUTO_SKIP_MINUTES * MIN;
+  // La hora registrada es la del vencimiento (hora vigente + espera), aunque la app se haya enterado tarde.
+  const at = Date.parse(r.due_at) + autoSkipWaitMin(r.snooze_count) * MIN;
   await db.runAsync(
     `UPDATE dose_logs SET status='skipped', auto_skipped=1, action_at=?, on_time=NULL, updated_at=? WHERE id=?`,
     [iso(at), iso(Date.now()), r.id]
@@ -381,14 +388,17 @@ async function autoSkipRow(db, r) {
   await addEvent(db, { doseId: r.id, medId: r.medication_id, type: 'auto_skipped', at, scheduledAt: r.scheduled_at });
 }
 
-// Tercer momento: la toma ya se aplazó 2 veces y pasaron 10 min sin marcarla -> Omitida automática.
+// Toma sin respuesta -> Omitida automática, según los aplazos que le quedaban (ver autoSkipWaitMin):
+// 0 aplazos usados espera 30 min, 1 espera 20 min y 2 espera 10 min, contados desde su hora vigente.
 async function autoSkipExpiredImpl() {
   const db = await getDb();
-  const limit = iso(Date.now() - AUTO_SKIP_MINUTES * MIN);
-  const rows = await db.getAllAsync(
-    `SELECT * FROM dose_logs WHERE status='pending' AND snooze_count >= ? AND due_at <= ?`,
-    [MAX_SNOOZES, limit]
+  const nowMs = Date.now();
+  // La espera mínima es AUTO_SKIP_MINUTES; el filtro fino por cantidad de aplazos se hace después.
+  const candidates = await db.getAllAsync(
+    `SELECT * FROM dose_logs WHERE status='pending' AND due_at <= ?`,
+    [iso(nowMs - AUTO_SKIP_MINUTES * MIN)]
   );
+  const rows = candidates.filter((r) => Date.parse(r.due_at) + autoSkipWaitMin(r.snooze_count) * MIN <= nowMs);
   if (rows.length === 0) return 0;
   await db.withTransactionAsync(async () => {
     await Promise.all(rows.map((r) => autoSkipRow(db, r)));

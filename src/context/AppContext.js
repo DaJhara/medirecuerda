@@ -102,7 +102,7 @@ export function AppProvider({ children }) {
     })();
   }, [enterSession]);
 
-  // Vigilante: omite solo las tomas que agotaron sus aplazos y cambia de día a medianoche.
+  // Vigilante: omite las tomas sin respuesta cuyo plazo venció (30/20/10 min según sus aplazos) y cambia de día a medianoche.
   const tick = useCallback(async () => {
     if (!readyRef.current || !sessionRef.current) return;
     try {

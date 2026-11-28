@@ -252,13 +252,15 @@ async function getTodayDosesImpl() {
 }
 
 // Próximas tomas pendientes (para programar las notificaciones).
+// Tomas pendientes para programar recordatorios: las futuras y también las que ya llegaron a su hora pero todavía
+// están dentro de su plazo antes de omitirse solas (para seguir avisando cada 10 min).
 async function getUpcomingImpl(limit = 60) {
   const db = await getDb();
   const rows = await db.getAllAsync(
     `${DOSE_SELECT}
      WHERE m.deleted_at IS NULL AND m.active = 1 AND m.user_id = ? AND d.status = 'pending' AND d.due_at > ?
      ORDER BY d.due_at LIMIT ?`,
-    [await getCurrentUserId(db), iso(Date.now()), limit]
+    [await getCurrentUserId(db), iso(Date.now() - autoSkipWaitMin(0) * MIN), limit]
   );
   return rows.map(mapDose);
 }

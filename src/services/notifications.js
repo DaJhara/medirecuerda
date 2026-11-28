@@ -5,6 +5,7 @@ import { Linking, Platform } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { fmtTime } from './schedule';
 import { refillInfo } from './refill';
+import { autoSkipWaitMin, SNOOZE_MINUTES } from '../db/repository';
 
 // En Android el sonido y la vibración pertenecen al CANAL y no se pueden cambiar después de creado.
 // Por eso hay un canal por cada combinación de ajustes (sonido sí/no x vibración sí/no).
@@ -82,7 +83,7 @@ export async function ensureChannel(settings) {
 }
 
 // iOS permite como máximo 64 notificaciones programadas; dejamos margen.
-const MAX_SCHEDULED = 60;
+const MAX_SCHEDULED = 54; // Android admite más, pero iOS solo 64 pendientes: se deja margen para los avisos de resurtir
 const HORIZON_DAYS = 14;
 
 // Define cómo se muestran las notificaciones si la app está abierta.
@@ -166,20 +167,37 @@ async function drain() {
   }
 }
 
-// Programa el aviso de una toma (identificador fijo: si se repite, reemplaza al anterior y no se duplica).
-function scheduleDose(d, settings) {
+// Avisos de una toma: el de su hora y, mientras siga sin respuesta, uno cada SNOOZE_MINUTES hasta que la app la
+// omita sola (autoSkipWaitMin: 30 min si no se aplazó, 20 si se aplazó una vez, 10 si ya no hay aplazos).
+// Ejemplo sin aplazos y hora 8:00: avisa a las 8:00, 8:10 y 8:20, y a las 8:30 se omite.
+function remindersOf(d) {
+  const wait = autoSkipWaitMin(d.snoozeCount);
+  const list = [{ d, at: d.dueAt, repeat: 0 }];
+  for (let k = 1; k * SNOOZE_MINUTES < wait; k++) list.push({ d, at: d.dueAt + k * SNOOZE_MINUTES * 60000, repeat: k });
+  return list;
+}
+
+// Programa un aviso (identificador fijo: si se repite, reemplaza al anterior y no se duplica).
+function scheduleDose({ d, at, repeat }, settings) {
   const notesSuffix = d.notes ? ` · ${d.notes}` : '';
+  const skipAt = fmtTime(d.dueAt + autoSkipWaitMin(d.snoozeCount) * 60000);
+  let title = 'Hora de tu medicamento';
+  if (d.snoozeCount > 0) title = 'Recordatorio aplazado';
+  if (repeat > 0) title = 'Aún no registras tu medicamento';
+  const body = repeat > 0
+    ? `${d.name} · ${d.dose}${notesSuffix}. Si no la marcas, se omitirá a las ${skipAt}.`
+    : `${d.name} · ${d.dose}${notesSuffix} (${fmtTime(d.dueAt)})`;
   return Notifications.scheduleNotificationAsync({
-    identifier: `dose-${d.id}-${d.dueAt}`,
+    identifier: `dose-${d.id}-${d.dueAt}-r${repeat}`,
     content: {
-      title: d.snoozeCount > 0 ? 'Recordatorio aplazado' : 'Hora de tu medicamento',
-      body: `${d.name} · ${d.dose}${notesSuffix} (${fmtTime(d.dueAt)})`,
+      title,
+      body,
       sound: settings.sound ? 'default' : false,
       vibrate: settings.vibrate ? VIBRATION : undefined, // Android antiguo (antes de los canales)
     },
     trigger: {
       type: Notifications.SchedulableTriggerInputTypes.DATE,
-      date: new Date(d.dueAt),
+      date: new Date(at),
       channelId: channelIdFor(settings),
       ...(Platform.OS === 'android' ? { delivery: 'alarmClock' } : {}),
     },
@@ -190,14 +208,44 @@ async function rescheduleNow({ upcoming, settings, meds }) {
   await Notifications.cancelAllScheduledNotificationsAsync();
 
   const now = Date.now();
+  // Cada toma aporta su aviso y sus repeticiones; solo se programan los que aún no pasaron, los más próximos primero.
   const list = upcoming
-    .filter((d) => d.dueAt > now)
-    .sort((a, b) => a.dueAt - b.dueAt)
+    .flatMap(remindersOf)
+    .filter((r) => r.at > now)
+    .sort((a, b) => a.at - b.at)
     .slice(0, MAX_SCHEDULED);
 
   // Las programaciones son independientes entre sí: se lanzan juntas.
-  await Promise.all(list.map((d) => scheduleDose(d, settings)));
+  await Promise.all(list.map((r) => scheduleDose(r, settings)));
   await scheduleRefillNotices(meds, settings, now);
+  await clearStaleDelivered(upcoming);
+}
+
+// Separa "dose-<id>-<hora>-r<n>" en { id, dueAt } (el id tiene guiones, por eso se corta por el final).
+function parseDoseIdentifier(identifier) {
+  const noPrefix = identifier.slice('dose-'.length);
+  const noRepeat = noPrefix.slice(0, noPrefix.lastIndexOf('-r'));
+  const cut = noRepeat.lastIndexOf('-');
+  return { id: noRepeat.slice(0, cut), dueAt: noRepeat.slice(cut + 1) };
+}
+
+// Quita de la bandeja los avisos ya entregados que dejaron de valer: de tomas ya atendidas (tomadas u omitidas) o
+// de una hora anterior a la que tienen ahora (aplazadas). Así no se acumulan avisos viejos. Nunca lanza error.
+async function clearStaleDelivered(upcoming) {
+  try {
+    const shown = await Notifications.getPresentedNotificationsAsync();
+    const current = new Map(upcoming.map((d) => [d.id, String(d.dueAt)]));
+    const stale = shown
+      .map((n) => n.request.identifier)
+      .filter((identifier) => {
+        if (!identifier.startsWith('dose-')) return false;
+        const { id, dueAt } = parseDoseIdentifier(identifier);
+        return current.get(id) !== dueAt;
+      });
+    await Promise.all(stale.map((identifier) => Notifications.dismissNotificationAsync(identifier)));
+  } catch {
+    /* no se pudo leer la bandeja: no es grave */
+  }
 }
 
 // Aviso de resurtir: el primer día que faltan REFILL_DAYS días o menos (a las 9:00). Si ya faltan menos, se
